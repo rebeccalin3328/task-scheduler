@@ -71,9 +71,11 @@
     <button class="btn secondary" id="saveSettings">Save</button>
   </section>
 
+  <button class="btn primary" id="pasteBtn" style="margin-bottom:14px">📋 Paste copied message</button>
+
   <section class="card">
     <label for="msg">Message</label>
-    <textarea id="msg" placeholder="Share a WhatsApp message here, or paste one"></textarea>
+    <textarea id="msg" placeholder="In WhatsApp: long-press a message → ⋮ → Copy. Then tap the Paste button above."></textarea>
     <div id="chip" class="chip hidden"></div>
   </section>
 
@@ -98,7 +100,8 @@
     <details>
       <summary>How to use</summary>
       <ol>
-        <li>In WhatsApp, long-press a message → Share (↗) → Task Scheduler.</li>
+        <li>In WhatsApp, long-press a message → ⋮ (top right) → Copy. Tip: select several messages first to copy them together.</li>
+        <li>Open Task Scheduler and tap Paste copied message. If Chrome asks to see copied text, tap Allow.</li>
         <li>Check the task, date and time. Fix anything that looks wrong.</li>
         <li>Tap Add to team calendar, then Save in Google Calendar.</li>
       </ol>
@@ -241,6 +244,44 @@
     history.replaceState(null, '', location.pathname);
   }
   detect();
+
+  // Paste from clipboard (WhatsApp has no Share option for text, only Copy).
+  var lastClip = '';
+  try { lastClip = sessionStorage.getItem('lastClip') || ''; } catch (e) {}
+  function useClip(text) {
+    text = (text || '').trim();
+    if (!text) return false;
+    lastClip = text;
+    try { sessionStorage.setItem('lastClip', text); } catch (e) {}
+    $('msg').value = text;
+    detect();
+    return true;
+  }
+  $('pasteBtn').onclick = function () {
+    if (!navigator.clipboard || !navigator.clipboard.readText) { manualPaste(); return; }
+    navigator.clipboard.readText().then(function (t) {
+      if (!useClip(t)) manualPaste('Nothing copied yet. In WhatsApp, long-press a message, tap ⋮, then Copy.');
+    }).catch(function () { manualPaste(); });
+  };
+  function manualPaste(msg) {
+    var chip = $('chip');
+    chip.className = 'chip warn';
+    chip.textContent = msg || 'Long-press inside the Message box and tap Paste.';
+    $('msg').focus();
+  }
+  // If Chrome already allows clipboard reading, fill in a newly copied message automatically.
+  function autoPaste() {
+    if (document.visibilityState !== 'visible' || !navigator.permissions || !navigator.clipboard) return;
+    navigator.permissions.query({ name: 'clipboard-read' }).then(function (p) {
+      if (p.state !== 'granted') return;
+      navigator.clipboard.readText().then(function (t) {
+        t = (t || '').trim();
+        if (t && t !== lastClip && t !== $('msg').value.trim()) useClip(t);
+      }).catch(function () {});
+    }).catch(function () {});
+  }
+  if (!shared) autoPaste();
+  document.addEventListener('visibilitychange', autoPaste);
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
 })();
