@@ -106,6 +106,11 @@
   </section>
 
   <section class="card">
+    <div class="row">
+      <div><label for="contact">Contact</label><input id="contact" placeholder="Name" autocomplete="off"></div>
+      <div><label for="phone">Phone</label><input id="phone" type="tel" placeholder="012-345 6789" autocomplete="off"></div>
+    </div>
+    <p class="hint" id="contactHint">Saved to the event with a tap-to-chat WhatsApp link.</p>
     <label for="location">Location</label>
     <input id="location" placeholder="Add location">
     <label for="guests">Guests</label>
@@ -129,7 +134,7 @@
     <details>
       <summary>How to use</summary>
       <ol>
-        <li>In WhatsApp, long-press a message → ⋮ (top right) → Copy. Tip: select several messages first to copy them together.</li>
+        <li>In WhatsApp, long-press a message → ⋮ (top right) → Copy. Tip: select two or more messages before copying, so the sender's name or number comes along too.</li>
         <li>Open Task Scheduler and tap Paste copied message. If Chrome asks to see copied text, tap Allow.</li>
         <li>Check the task, date and time. Fix anything that looks wrong.</li>
         <li>Tap Add to team calendar, then Save in Google Calendar.</li>
@@ -181,6 +186,11 @@
     $('date').value = r.date.y + '-' + pad(r.date.m) + '-' + pad(r.date.d);
     $('endDate').value = $('date').value;
     $('desc').value = r.details;
+    $('contact').value = r.contacts.names.join(', ');
+    $('phone').value = r.contacts.phones[0] || '';
+    $('contactHint').textContent = (r.contacts.names.length || r.contacts.phones.length)
+      ? 'Found in the message. Saved to the event with a tap-to-chat WhatsApp link.'
+      : 'Not in the copied text. Type it in, or copy two or more messages together so WhatsApp includes the sender.';
     $('allDay').checked = r.allDay;
     if (r.time) {
       $('start').value = pad(r.time.h) + ':' + pad(r.time.min);
@@ -224,10 +234,19 @@
     }
     var guests = $('guests').value.split(/[,;\s]+/).filter(function (g) { return /.+@.+\..+/.test(g); });
     return {
-      title: title, details: $('desc').value.trim(), location: $('location').value.trim(),
+      title: title, details: withContact($('desc').value.trim()), location: $('location').value.trim(),
       guests: guests, rrule: rrule($('repeat').value, start), busy: $('busy').value === 'true',
       useTeam: $('cal').value === 'team', start: start, end: end, allDay: allDay
     };
+  }
+
+  function withContact(desc) {
+    var name = $('contact').value.trim(), phone = $('phone').value.trim();
+    if (!name && !phone) return desc;
+    var lines = ['Contact: ' + [name, phone].filter(Boolean).join(' · ')];
+    var wa = TaskParser.waNumber(phone);
+    if (wa) lines.push('WhatsApp: https://wa.me/' + wa);
+    return (desc ? desc + '\n\n' : '') + lines.join('\n');
   }
 
   function rrule(kind, start) {
@@ -287,7 +306,7 @@
 
   var timer;
   $('msg').addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(detect, 350); });
-  ['title', 'date', 'endDate', 'start', 'end', 'location', 'guests', 'desc'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
+  ['title', 'date', 'endDate', 'start', 'end', 'location', 'guests', 'desc', 'contact', 'phone'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
   ['repeat', 'cal', 'busy'].forEach(function (id) { $(id).addEventListener('change', refreshLinks); });
   $('date').addEventListener('change', function () { if (!$('endDate').value || $('endDate').value < $('date').value) $('endDate').value = $('date').value; refreshLinks(); });
   $('allDay').addEventListener('change', function () { toggleTime(); refreshLinks(); });
@@ -323,7 +342,7 @@
   $('clearBtn').onclick = function () {
     $('msg').value = ''; $('title').value = ''; $('date').value = '';
     $('allDay').checked = false; $('start').value = ''; $('end').value = '';
-    $('endDate').value = ''; $('location').value = ''; $('guests').value = ''; $('desc').value = '';
+    $('endDate').value = ''; $('location').value = ''; $('guests').value = ''; $('contact').value = ''; $('phone').value = ''; $('desc').value = '';
     $('repeat').value = ''; $('busy').value = 'true';
     $('chip').className = 'chip hidden';
     toggleTime(); refreshLinks();

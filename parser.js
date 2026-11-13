@@ -233,6 +233,27 @@
     return null;
   }
 
+  // Sender names from copied headers ("[13/11, 4:02 pm] Ali: ...") and phone numbers anywhere.
+  function findContacts(raw) {
+    var names = [], phones = [];
+    var hdr = /^\s*\[[^\]\n]{4,40}\]\s*([^:\n]{1,40}):/gm, h;
+    while ((h = hdr.exec(raw))) {
+      var n = h[1].trim();
+      if (/^[+\d][\d\s\-()]{7,}$/.test(n)) { if (phones.indexOf(n) < 0) phones.push(n); }
+      else if (names.indexOf(n) < 0) names.push(n);
+    }
+    var body = cleanWhatsApp(raw);
+    var ph = /(?:\+?\d{1,3}[\s-]?)?\(?0?1\d\)?[\s-]?\d{3,4}[\s-]?\d{4}\b|\+\d{1,3}[\s-]?\d{1,4}[\s-]?\d{3,4}[\s-]?\d{3,4}\b/g, q;
+    while ((q = ph.exec(body))) { var v = q[0].trim(); if (phones.indexOf(v) < 0) phones.push(v); }
+    return { names: names, phones: phones };
+  }
+  // Digits for a wa.me link; Malaysian 01x numbers get the 60 country code.
+  function waNumber(phone) {
+    var d = String(phone || '').replace(/\D/g, '');
+    if (/^0\d{8,10}$/.test(d)) d = '6' + d;
+    return d.length >= 9 ? d : '';
+  }
+
   function makeTitle(text) {
     var first = text.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean)[0] || '';
     if (first.length > 80) first = first.slice(0, 77).replace(/\s+\S*$/, '') + '…';
@@ -253,7 +274,9 @@
       date = addDays(now, later ? 0 : 1);
     }
     if (!date) date = addDays(now, 1);
+    var contacts = findContacts(text);
     return {
+      contacts: contacts,
       title: makeTitle(clean),
       details: clean,
       date: date,
@@ -264,7 +287,7 @@
     };
   }
 
-  var api = { parse: parse, cleanWhatsApp: cleanWhatsApp };
+  var api = { parse: parse, cleanWhatsApp: cleanWhatsApp, waNumber: waNumber };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TaskParser = api;
 })(this);
