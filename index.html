@@ -71,7 +71,10 @@
     <button class="btn secondary" id="saveSettings">Save</button>
   </section>
 
-  <button class="btn primary" id="pasteBtn" style="margin-bottom:14px">📋 Paste copied message</button>
+  <div class="row" style="margin-bottom:14px">
+    <button class="btn primary" id="pasteBtn" style="flex:2">📋 Paste copied message</button>
+    <button class="btn secondary" id="clearBtn" style="flex:1;margin-top:0">✕ Clear</button>
+  </div>
 
   <section class="card">
     <label for="msg">Message</label>
@@ -262,6 +265,13 @@
     navigator.clipboard.readText().then(function (t) {
       if (!useClip(t)) manualPaste('Nothing copied yet. In WhatsApp, long-press a message, tap ⋮, then Copy.');
     }).catch(function () { manualPaste(); });
+  };
+  $('clearBtn').onclick = function () {
+    $('msg').value = ''; $('title').value = ''; $('date').value = '';
+    $('allDay').checked = false; $('start').value = ''; $('end').value = '';
+    $('chip').className = 'chip hidden';
+    toggleTime(); refreshLinks();
+    $('msg').focus();
   };
   function manualPaste(msg) {
     var chip = $('chip');
