@@ -86,13 +86,39 @@
     <label for="title">Task</label>
     <input id="title" placeholder="What needs doing">
     <div class="row">
-      <div><label for="date">Date</label><input id="date" type="date"></div>
+      <div><label for="date">Start date</label><input id="date" type="date"></div>
+      <div><label for="endDate">End date</label><input id="endDate" type="date"></div>
     </div>
     <label class="check"><input type="checkbox" id="allDay"> All day</label>
     <div class="row" id="timeRow">
       <div><label for="start">Start</label><input id="start" type="time"></div>
       <div><label for="end">End</label><input id="end" type="time"></div>
     </div>
+    <label for="repeat">Repeat</label>
+    <select id="repeat">
+      <option value="">Does not repeat</option>
+      <option value="DAILY">Daily</option>
+      <option value="WEEKDAYS">Every weekday (Mon to Fri)</option>
+      <option value="WEEKLY">Weekly</option>
+      <option value="MONTHLY">Monthly</option>
+      <option value="YEARLY">Yearly</option>
+    </select>
+  </section>
+
+  <section class="card">
+    <label for="location">Location</label>
+    <input id="location" placeholder="Add location">
+    <label for="guests">Guests</label>
+    <input id="guests" type="email" multiple placeholder="Emails, separated by commas" autocomplete="off">
+    <label for="desc">Description</label>
+    <textarea id="desc" placeholder="Notes for the event"></textarea>
+    <div class="row">
+      <div><label for="cal">Calendar</label>
+        <select id="cal"><option value="team">Team calendar</option><option value="mine">My calendar</option></select></div>
+      <div><label for="busy">Show as</label>
+        <select id="busy"><option value="true">Busy</option><option value="false">Free</option></select></div>
+    </div>
+    <p class="hint">Reminders, colour, visibility and Google Meet can't be sent from here. Set them on Google Calendar's screen before you tap Save.</p>
   </section>
 
   <a class="btn primary" id="addBtn" href="#" target="_blank" rel="noopener">Add to team calendar</a>
@@ -153,6 +179,8 @@
     var r = TaskParser.parse(text, new Date());
     $('title').value = r.title;
     $('date').value = r.date.y + '-' + pad(r.date.m) + '-' + pad(r.date.d);
+    $('endDate').value = $('date').value;
+    $('desc').value = r.details;
     $('allDay').checked = r.allDay;
     if (r.time) {
       $('start').value = pad(r.time.h) + ':' + pad(r.time.min);
@@ -177,23 +205,36 @@
 
   function eventData() {
     var title = $('title').value.trim() || 'Task';
-    var details = $('msg').value.trim();
     var ds = $('date').value;
     if (!ds) return null;
     var p = ds.split('-').map(Number);
+    var q = ($('endDate').value || ds).split('-').map(Number);
     var allDay = $('allDay').checked;
     var start, end;
     if (allDay) {
       start = new Date(p[0], p[1] - 1, p[2]);
-      end = new Date(p[0], p[1] - 1, p[2] + 1);
+      end = new Date(q[0], q[1] - 1, q[2] + 1);
+      if (end <= start) end = new Date(p[0], p[1] - 1, p[2] + 1);
     } else {
       var s = ($('start').value || '09:00').split(':').map(Number);
       var e = ($('end').value || addMinutes($('start').value || '09:00', 60)).split(':').map(Number);
       start = new Date(p[0], p[1] - 1, p[2], s[0], s[1]);
-      end = new Date(p[0], p[1] - 1, p[2], e[0], e[1]);
+      end = new Date(q[0], q[1] - 1, q[2], e[0], e[1]);
       if (end <= start) end = new Date(start.getTime() + (+$('duration').value) * 60000);
     }
-    return { title: title, details: details, start: start, end: end, allDay: allDay };
+    var guests = $('guests').value.split(/[,;\s]+/).filter(function (g) { return /.+@.+\..+/.test(g); });
+    return {
+      title: title, details: $('desc').value.trim(), location: $('location').value.trim(),
+      guests: guests, rrule: rrule($('repeat').value, start), busy: $('busy').value === 'true',
+      useTeam: $('cal').value === 'team', start: start, end: end, allDay: allDay
+    };
+  }
+
+  function rrule(kind, start) {
+    if (!kind) return '';
+    if (kind === 'WEEKDAYS') return 'RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';
+    if (kind === 'WEEKLY') return 'RRULE:FREQ=WEEKLY;BYDAY=' + ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][start.getDay()];
+    return 'RRULE:FREQ=' + kind;
   }
 
   function stamp(d, allDay) {
@@ -209,8 +250,12 @@
       details: ev.details,
       ctz: tz
     });
+    if (ev.location) q.set('location', ev.location);
+    if (ev.guests.length) q.set('add', ev.guests.join(','));
+    if (ev.rrule) q.set('recur', ev.rrule);
+    q.set('trp', ev.busy ? 'true' : 'false');
     var cal = store.get('calId', '');
-    if (cal) q.set('src', cal);
+    if (cal && ev.useTeam) q.set('src', cal);
     return 'https://calendar.google.com/calendar/render?' + q.toString();
   }
 
@@ -219,6 +264,10 @@
     return 'intent://#Intent;action=android.intent.action.INSERT;type=vnd.android.cursor.item/event;' +
       'S.title=' + e(ev.title) + ';S.description=' + e(ev.details) + ';' +
       'l.beginTime=' + ev.start.getTime() + ';l.endTime=' + ev.end.getTime() + ';B.allDay=' + ev.allDay + ';' +
+      (ev.location ? 'S.eventLocation=' + e(ev.location) + ';' : '') +
+      (ev.guests.length ? 'S.android.intent.extra.EMAIL=' + e(ev.guests.join(',')) + ';' : '') +
+      (ev.rrule ? 'S.rrule=' + e(ev.rrule.replace(/^RRULE:/, '')) + ';' : '') +
+      'i.availability=' + (ev.busy ? 0 : 1) + ';' +
       'S.browser_fallback_url=' + e(webLink(ev)) + ';end';
   }
 
@@ -226,16 +275,21 @@
     var ev = eventData();
     var ok = !!ev;
     $('addBtn').href = ok ? webLink(ev) : '#';
+    $('addBtn').textContent = $('cal').value === 'mine' ? 'Add to my calendar' : 'Add to team calendar';
     $('appBtn').href = ok ? appLink(ev) : '#';
     $('addBtn').style.opacity = $('appBtn').style.opacity = ok ? 1 : 0.5;
-    $('calNote').textContent = store.get('calId', '')
+    $('calNote').textContent = $('cal').value === 'mine'
+      ? 'Saves to your own calendar.'
+      : store.get('calId', '')
       ? 'Saves to your team calendar. In the Calendar app, pick the team calendar before saving.'
       : 'No team calendar set yet, so events go to your own calendar. Tap ⚙︎ to add it.';
   }
 
   var timer;
   $('msg').addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(detect, 350); });
-  ['title', 'date', 'start', 'end'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
+  ['title', 'date', 'endDate', 'start', 'end', 'location', 'guests', 'desc'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
+  ['repeat', 'cal', 'busy'].forEach(function (id) { $(id).addEventListener('change', refreshLinks); });
+  $('date').addEventListener('change', function () { if (!$('endDate').value || $('endDate').value < $('date').value) $('endDate').value = $('date').value; refreshLinks(); });
   $('allDay').addEventListener('change', function () { toggleTime(); refreshLinks(); });
   $('start').addEventListener('change', function () { $('end').value = addMinutes($('start').value, +$('duration').value); refreshLinks(); });
 
@@ -269,6 +323,8 @@
   $('clearBtn').onclick = function () {
     $('msg').value = ''; $('title').value = ''; $('date').value = '';
     $('allDay').checked = false; $('start').value = ''; $('end').value = '';
+    $('endDate').value = ''; $('location').value = ''; $('guests').value = ''; $('desc').value = '';
+    $('repeat').value = ''; $('busy').value = 'true';
     $('chip').className = 'chip hidden';
     toggleTime(); refreshLinks();
     $('msg').focus();
