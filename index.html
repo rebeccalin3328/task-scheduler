@@ -72,13 +72,13 @@
   </section>
 
   <div class="row" style="margin-bottom:14px">
-    <button class="btn primary" id="pasteBtn" style="flex:2">📋 Paste copied message</button>
+    <button class="btn primary" id="pasteBtn" style="flex:2">📋 Paste copied text</button>
     <button class="btn secondary" id="clearBtn" style="flex:1;margin-top:0">✕ Clear</button>
   </div>
 
   <section class="card">
     <label for="msg">Message</label>
-    <textarea id="msg" placeholder="In WhatsApp: long-press a message → ⋮ → Copy. Then tap the Paste button above."></textarea>
+    <textarea id="msg" placeholder="Copy a WhatsApp message or an email, then tap Paste above."></textarea>
     <div id="chip" class="chip hidden"></div>
   </section>
 
@@ -107,9 +107,12 @@
 
   <section class="card">
     <div class="row">
-      <div><label for="contact">Contact</label><input id="contact" placeholder="Name" autocomplete="off"></div>
-      <div><label for="phone">Phone</label><input id="phone" type="tel" placeholder="012-345 6789" autocomplete="off"></div>
+      <div><label for="contact">Contact</label><input id="contact" list="nameList" placeholder="Name" autocomplete="off"></div>
+      <div><label for="phone">Phone</label><input id="phone" type="tel" list="phoneList" placeholder="012-345 6789" autocomplete="off"></div>
     </div>
+    <label for="cemail">Contact email</label>
+    <input id="cemail" type="email" list="emailList" placeholder="name@company.com" autocomplete="off">
+    <datalist id="nameList"></datalist><datalist id="phoneList"></datalist><datalist id="emailList"></datalist>
     <p class="hint" id="contactHint">Saved to the event with a tap-to-chat WhatsApp link.</p>
     <label for="location">Location</label>
     <input id="location" placeholder="Add location">
@@ -135,7 +138,8 @@
       <summary>How to use</summary>
       <ol>
         <li>In WhatsApp, long-press a message → ⋮ (top right) → Copy. Tip: select two or more messages before copying, so the sender's name or number comes along too.</li>
-        <li>Open Task Scheduler and tap Paste copied message. If Chrome asks to see copied text, tap Allow.</li>
+        <li>From email (Gmail, Outlook): select the text, including the From and Subject lines if you can, then tap Copy. The subject becomes the task, and the sender becomes the contact.</li>
+        <li>Open Task Scheduler and tap Paste copied text. If Chrome asks to see copied text, tap Allow.</li>
         <li>Check the task, date and time. Fix anything that looks wrong.</li>
         <li>Tap Add to team calendar, then Save in Google Calendar.</li>
       </ol>
@@ -186,10 +190,14 @@
     $('date').value = r.date.y + '-' + pad(r.date.m) + '-' + pad(r.date.d);
     $('endDate').value = $('date').value;
     $('desc').value = r.details;
-    $('contact').value = r.contacts.names.join(', ');
-    $('phone').value = r.contacts.phones[0] || '';
-    $('contactHint').textContent = (r.contacts.names.length || r.contacts.phones.length)
-      ? 'Found in the message. Saved to the event with a tap-to-chat WhatsApp link.'
+    var c = r.contacts;
+    $('contact').value = c.names[0] || '';
+    $('phone').value = c.phones[0] || '';
+    $('cemail').value = c.emails[0] || '';
+    fillList('nameList', c.names); fillList('phoneList', c.phones); fillList('emailList', c.emails);
+    var extra = c.names.length + c.phones.length + c.emails.length > 3;
+    $('contactHint').textContent = (c.names.length || c.phones.length || c.emails.length)
+      ? 'Found in the text' + (extra ? '. Tap a field to pick another name or number found' : '') + '. Saved to the event with a tap-to-chat WhatsApp link.'
       : 'Not in the copied text. Type it in, or copy two or more messages together so WhatsApp includes the sender.';
     $('allDay').checked = r.allDay;
     if (r.time) {
@@ -240,10 +248,14 @@
     };
   }
 
+  function fillList(id, items) {
+    var dl = $(id); dl.innerHTML = '';
+    items.forEach(function (v) { var o = document.createElement('option'); o.value = v; dl.appendChild(o); });
+  }
   function withContact(desc) {
-    var name = $('contact').value.trim(), phone = $('phone').value.trim();
-    if (!name && !phone) return desc;
-    var lines = ['Contact: ' + [name, phone].filter(Boolean).join(' · ')];
+    var name = $('contact').value.trim(), phone = $('phone').value.trim(), mail = $('cemail').value.trim();
+    if (!name && !phone && !mail) return desc;
+    var lines = ['Contact: ' + [name, phone, mail].filter(Boolean).join(' · ')];
     var wa = TaskParser.waNumber(phone);
     if (wa) lines.push('WhatsApp: https://wa.me/' + wa);
     return (desc ? desc + '\n\n' : '') + lines.join('\n');
@@ -306,7 +318,7 @@
 
   var timer;
   $('msg').addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(detect, 350); });
-  ['title', 'date', 'endDate', 'start', 'end', 'location', 'guests', 'desc', 'contact', 'phone'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
+  ['title', 'date', 'endDate', 'start', 'end', 'location', 'guests', 'desc', 'contact', 'phone', 'cemail'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
   ['repeat', 'cal', 'busy'].forEach(function (id) { $(id).addEventListener('change', refreshLinks); });
   $('date').addEventListener('change', function () { if (!$('endDate').value || $('endDate').value < $('date').value) $('endDate').value = $('date').value; refreshLinks(); });
   $('allDay').addEventListener('change', function () { toggleTime(); refreshLinks(); });
@@ -342,7 +354,7 @@
   $('clearBtn').onclick = function () {
     $('msg').value = ''; $('title').value = ''; $('date').value = '';
     $('allDay').checked = false; $('start').value = ''; $('end').value = '';
-    $('endDate').value = ''; $('location').value = ''; $('guests').value = ''; $('contact').value = ''; $('phone').value = ''; $('desc').value = '';
+    $('endDate').value = ''; $('location').value = ''; $('guests').value = ''; $('contact').value = ''; $('phone').value = ''; $('cemail').value = ''; $('desc').value = '';
     $('repeat').value = ''; $('busy').value = 'true';
     $('chip').className = 'chip hidden';
     toggleTime(); refreshLinks();

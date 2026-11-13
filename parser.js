@@ -233,29 +233,147 @@
     return null;
   }
 
-  // Sender names from copied headers ("[13/11, 4:02 pm] Ali: ...") and phone numbers anywhere.
-  function findContacts(raw) {
-    var names = [], phones = [];
-    var hdr = /^\s*\[[^\]\n]{4,40}\]\s*([^:\n]{1,40}):/gm, h;
-    while ((h = hdr.exec(raw))) {
-      var n = h[1].trim();
-      if (/^[+\d][\d\s\-()]{7,}$/.test(n)) { if (phones.indexOf(n) < 0) phones.push(n); }
-      else if (names.indexOf(n) < 0) names.push(n);
+  // ---------- Email handling ----------
+  var HEADER = /^\s*(from|sent|date|to|cc|bcc|subject|reply-to|dari|daripada|kepada|tarikh|dihantar|subjek|perkara|发件人|發件人|寄件者|收件人|收件者|抄送|日期|发送时间|發送時間|时间|時間|主题|主旨|主題)\s*[:：]\s*(.*)$/i;
+  var FROM_KEYS = /^(from|dari|daripada|发件人|發件人|寄件者)$/i;
+  var SUBJECT_KEYS = /^(subject|subjek|perkara|主题|主旨|主題)$/i;
+  var CUT_MARK = /^\s*(?:on\s.{4,120}wrote\s*:|pada\s.{4,120}menulis\s*:|在.{2,80}写道[:：]?|-{2,}\s*original message\s*-{2,}|-{2,}\s*mesej asal\s*-{2,}|_{8,})\s*$/i;
+  var DROP_LINE = /^\s*(?:-{2,}\s*forwarded message\s*-{2,}|begin forwarded message:?|sent from my .{1,30}|dihantar dari .{1,30}|get outlook for .{1,20}|发自我的.{1,20})\s*$/i;
+  var SIGNOFF = /^\s*(?:best\s+regards|kind\s+regards|warm\s+regards|warmest\s+regards|regards|rgds|br|thanks(?:\s*(?:&|and)\s*(?:best\s+)?regards)?|thank\s+you|thanks\s+a\s+lot|many\s+thanks|sincerely|yours\s+(?:sincerely|faithfully|truly)|cheers|best|terima\s+kasih|tq|tqvm|sekian|sekian,?\s*terima\s+kasih|yang\s+benar|salam\s+hormat|谢谢|謝謝|此致敬礼|此致|敬礼|祝好|顺祝商祺|順祝商祺)\s*[,，.!。]*\s*$/i;
+  var GREETING = /^\s*(?:hi|hello|hey|dear|good\s+(?:morning|afternoon|evening)|hai|helo|salam|assalamualaikum|selamat\s+\w+|tuan\/puan|您好|你好|大家好|各位)\b.{0,40}$/i;
+
+  // Split pasted text into subject, sender, main body and signature.
+  function parseEmail(text) {
+    var lines = text.split(/\r?\n/);
+    var headers = {}, out = [], isEmail = false, i;
+    for (i = 0; i < lines.length; i++) {
+      var h = lines[i].match(HEADER);
+      if (h && (FROM_KEYS.test(h[1]) || SUBJECT_KEYS.test(h[1]))) { isEmail = true; break; }
     }
-    var body = cleanWhatsApp(raw);
-    var ph = /(?:\+?\d{1,3}[\s-]?)?\(?0?1\d\)?[\s-]?\d{3,4}[\s-]?\d{4}\b|\+\d{1,3}[\s-]?\d{1,4}[\s-]?\d{3,4}[\s-]?\d{3,4}\b/g, q;
-    while ((q = ph.exec(body))) { var v = q[0].trim(); if (phones.indexOf(v) < 0) phones.push(v); }
-    return { names: names, phones: phones };
-  }
-  // Digits for a wa.me link; Malaysian 01x numbers get the 60 country code.
-  function waNumber(phone) {
-    var d = String(phone || '').replace(/\D/g, '');
-    if (/^0\d{8,10}$/.test(d)) d = '6' + d;
-    return d.length >= 9 ? d : '';
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (DROP_LINE.test(line)) continue;
+      if (CUT_MARK.test(line) && out.join('').trim()) break;
+      if (/^\s*>/.test(line)) continue;
+      var m = isEmail && line.match(HEADER);
+      if (m) {
+        var key = FROM_KEYS.test(m[1]) ? 'from' : SUBJECT_KEYS.test(m[1]) ? 'subject' : m[1].toLowerCase();
+        if (!headers[key]) headers[key] = m[2].trim();
+        continue;
+      }
+      out.push(line);
+    }
+    var body = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    var bl = body.split('\n'), sigAt = -1;
+    for (i = 0; i < bl.length; i++) {
+      if (/^\s*--\s*$/.test(bl[i]) || SIGNOFF.test(bl[i])) { sigAt = i; break; }
+    }
+    var subject = (headers.subject || '').replace(/^\s*((re|fw|fwd|balas|回复|回覆|转发|轉寄)\s*[:：]\s*)+/i, '').trim();
+    return {
+      isEmail: isEmail,
+      subject: subject,
+      from: headers.from || '',
+      body: body,
+      main: sigAt >= 0 ? bl.slice(0, sigAt).join('\n') : body,
+      signature: sigAt >= 0 ? bl.slice(sigAt + 1, sigAt + 10).join('\n') : ''
+    };
   }
 
-  function makeTitle(text) {
-    var first = text.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean)[0] || '';
+  // ---------- Contacts ----------
+  var PHONE_LABEL = /(?:\b(?:tel|telephone|phone|ph|mobile|mob|hp|h\/p|cell|handphone|contact(?:\s*no)?|telefon|whatsapp|wa|fax)\b|no\.?\s*(?:tel|hp|telefon|phone)|电话|電話|手机|手機|联系电话|聯絡電話)\s*(?:no\.?)?\s*[:：.]?\s*(\+?[\d\s().-]{8,22}\d)/gi;
+  var PHONE_ANY = /(?:\+\s?\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,5}(?!\d)/g;
+  var EMAIL_RE = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
+  var HONORIFIC = /\b((?:Mr|Mrs|Ms|Miss|Mdm|Madam|Dr|Encik|En|Puan|Pn|Cik|Tuan|Datuk|Dato'?|Datin|Tan Sri|Ir|Prof|Haji|Hajah|Ustaz)\.?\s+[A-Z][\w'@-]*(?:\s+(?:bin|binti|bt|bin|a\/l|a\/p|[A-Z][\w'-]*)){0,3})/;
+  var CN_NAME = /(?:联系|聯繫|联络|聯絡|打给|打給|找|给|給|问|問|和|跟|与|與|请|請|通知)?([一-鿿]{1,2}(?:先生|小姐|女士|太太|经理|經理|总|總|老板|老闆|医生|醫生|老师|老師))/;
+  var ACTION_NAME = /\b(?:call|contact|ask|whatsapp|wa|ping|text|email|hubungi|telefon|tanya|jumpa|meet)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/;
+  var NAME_LABEL = /^\s*(?:name|nama|contact\s*person|contact|pic|person\s+in\s+charge|attn|attention|u\.p\.?|联系人|聯絡人|姓名)\s*[:：]\s*(.{2,60})$/im;
+
+  function digits(s) { return String(s || '').replace(/\D/g, ''); }
+  // Digits for a wa.me link; Malaysian local numbers get the 60 country code.
+  function waNumber(phone) {
+    var d = digits(phone);
+    if (/^0\d{8,10}$/.test(d)) d = '6' + d;
+    else if (/^1\d{8,9}$/.test(d)) d = '60' + d;
+    return d.length >= 10 && d.length <= 15 ? d : '';
+  }
+  function plausiblePhone(raw) {
+    var d = digits(raw);
+    if (d.length < 9 || d.length > 14) return false;
+    if (/^\+/.test(raw.trim())) return true;
+    return /^(?:0[1-9]|60|65|86|852|1[0-9])/.test(d);
+  }
+  function looksLikeName(s) {
+    s = s.trim();
+    return s.length >= 2 && s.length <= 40 && !/\d|@|https?:|www\./i.test(s) && !SIGNOFF.test(s) && !GREETING.test(s) &&
+      (/[一-鿿]/.test(s) || /^[A-Za-z][A-Za-z.'@\/ -]+$/.test(s));
+  }
+  function addUnique(list, v, keyFn) {
+    v = (v || '').trim(); if (!v) return;
+    var k = keyFn ? keyFn(v) : v.toLowerCase();
+    for (var i = 0; i < list.length; i++) if ((keyFn ? keyFn(list[i]) : list[i].toLowerCase()) === k) return;
+    list.push(v);
+  }
+  function phoneKey(p) { return waNumber(p) || digits(p); }
+
+  function findContacts(raw, email) {
+    var names = [], phones = [], emails = [], m;
+    // 1. WhatsApp copy headers
+    var hdr = /^\s*\[[^\]\n]{4,40}\]\s*([^:\n]{1,40}):/gm;
+    while ((m = hdr.exec(raw))) {
+      var who = m[1].trim();
+      if (/^[+\d][\d\s\-()]{7,}$/.test(who)) addUnique(phones, who, phoneKey); else addUnique(names, who);
+    }
+    // 2. Email sender: "Name <a@b.com>" / "a@b.com"
+    if (email.from) {
+      var em = email.from.match(EMAIL_RE);
+      var nm = email.from.replace(/<[^>]*>|\[[^\]]*\]|\([^)]*@[^)]*\)/g, '').replace(EMAIL_RE, '').replace(/["']/g, '').trim();
+      if (nm && looksLikeName(nm)) addUnique(names, nm);
+      if (em) addUnique(emails, em[0]);
+    }
+    var body = email.body;
+    // 3. Labelled names ("Contact person: Ali", "联系人：陈先生")
+    m = body.match(NAME_LABEL);
+    if (m) addUnique(names, m[1].replace(/[\s,;]+(?:tel|hp|phone|电话|手机).*$/i, '').replace(/\s*[\(\[].*$/, ''));
+    // 4. Signature: first name-like line after the sign-off
+    if (email.signature) {
+      var sl = email.signature.split('\n');
+      for (var i = 0; i < Math.min(sl.length, 3); i++) {
+        if (!sl[i].trim()) continue;
+        if (looksLikeName(sl[i])) { addUnique(names, sl[i].trim()); }
+        break;
+      }
+    }
+    // 5. Honorifics and "call Ahmad" style mentions
+    var mainText = (email.subject + '\n' + body);
+    m = mainText.match(HONORIFIC); if (m) addUnique(names, m[1]);
+    m = mainText.match(CN_NAME); if (m) addUnique(names, m[1]);
+    m = mainText.match(ACTION_NAME); if (m && !/^(Me|Us|Them|Him|Her|You|The|Back|Again)$/.test(m[1])) addUnique(names, m[1]);
+    // Phones: labelled first, then any plausible number
+    PHONE_LABEL.lastIndex = 0;
+    while ((m = PHONE_LABEL.exec(body))) {
+      var lbl = m[0].slice(0, m[0].indexOf(m[1])).toLowerCase();
+      if (/fax/.test(lbl)) continue;
+      if (plausiblePhone(m[1])) addUnique(phones, m[1].trim(), phoneKey);
+    }
+    var faxFree = body.replace(/\bfax\b[^\n]*/gi, '');
+    PHONE_ANY.lastIndex = 0;
+    while ((m = PHONE_ANY.exec(faxFree))) {
+      if (plausiblePhone(m[0])) addUnique(phones, m[0].trim(), phoneKey);
+    }
+    // Emails
+    var ems = body.match(EMAIL_RE) || [];
+    ems.forEach(function (e) { addUnique(emails, e); });
+    return { names: names, phones: phones, emails: emails };
+  }
+
+  function makeTitle(email) {
+    if (email.subject) return email.subject.length > 80 ? email.subject.slice(0, 77) + '…' : email.subject;
+    var lines = email.main.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+    var first = '';
+    for (var i = 0; i < lines.length; i++) {
+      if (GREETING.test(lines[i]) && lines.length > 1) continue;
+      first = lines[i]; break;
+    }
     if (first.length > 80) first = first.slice(0, 77).replace(/\s+\S*$/, '') + '…';
     return first;
   }
@@ -263,22 +381,28 @@
   function parse(text, now) {
     now = now || new Date();
     var clean = cleanWhatsApp(text);
-    var t = clean.toLowerCase();
+    var email = parseEmail(clean);
+    var contacts = findContacts(String(text || ''), email);
+    // Look for the date only in the subject and main message, never in headers, signatures, numbers or links.
+    var t = (email.subject + '\n' + email.main)
+      .replace(EMAIL_RE, ' ')
+      .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
+      .replace(PHONE_ANY, function (p) { return plausiblePhone(p) ? ' ' : p; })
+      .toLowerCase();
     var notes = [];
     var date = findDate(t, now, notes);
     var time = findTime(t, notes);
     var found = { date: !!date, time: !!time };
     if (!date && time) {
-      // Time only: today if still ahead, otherwise tomorrow.
       var later = time.h * 60 + time.min > now.getHours() * 60 + now.getMinutes();
       date = addDays(now, later ? 0 : 1);
     }
     if (!date) date = addDays(now, 1);
-    var contacts = findContacts(text);
     return {
       contacts: contacts,
-      title: makeTitle(clean),
-      details: clean,
+      isEmail: email.isEmail,
+      title: makeTitle(email),
+      details: email.body,
       date: date,
       time: time,
       allDay: !time,
