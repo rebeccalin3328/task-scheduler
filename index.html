@@ -71,6 +71,12 @@
   .hist { font-size: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   .hist:last-child { border-bottom: 0; }
   .hist small { color: var(--muted); display: block; }
+  .task { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .task:last-child { border-bottom: 0; }
+  .task input { width: 22px; height: 22px; margin: 0; flex: none; }
+  .task .meta { flex: 1; min-width: 0; }
+  .task.done .tt { text-decoration: line-through; color: var(--muted); }
+  .task small { display: block; color: var(--muted); }
   .empty { padding: 16px; text-align: center; color: var(--muted); font-size: 14px; }
   ol { padding-left: 20px; margin: 8px 0 0; font-size: 14px; color: var(--muted); }
 </style>
@@ -99,9 +105,9 @@
     <input id="crmUrl" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
     <div class="row">
       <div><label for="crmKey">Team key</label><input id="crmKey" autocomplete="off"></div>
-      <div><label for="me">Your name</label><input id="me" placeholder="e.g. Rebecca" autocomplete="off"></div>
+      <div><label for="me">Your work email</label><input id="me" type="email" placeholder="you@airnergy.my" autocomplete="off"></div>
     </div>
-    <p class="hint">Ask Rebecca for the CRM link and team key. With them set, every client you add a task for is saved to the team's Google Sheet.</p>
+    <p class="hint">Ask Rebecca for the CRM link and team key. Use the email you have in the team's User list, so tasks are assigned to you. Every task with a contact is then saved to the team's CRM sheet.</p>
     <button class="btn secondary" id="saveSettings">Save</button>
   </section>
 
@@ -193,55 +199,63 @@
 
   <div id="clientsView" class="hidden">
     <section class="card">
-      <input id="search" type="search" placeholder="Search name, phone, company" autocomplete="off">
+      <input id="search" type="search" placeholder="Search company, person, phone, AutoCount no." autocomplete="off">
       <div class="row" style="margin-top:10px">
-        <div><select id="statusFilter"><option value="">All statuses</option><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
+        <div><select id="statusFilter"><option value="">All clients</option><option value="New">New from WhatsApp</option><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
         <button class="btn secondary" id="syncBtn" style="flex:0 0 auto;width:auto;margin-top:0;padding:10px 14px">↻ Sync</button>
       </div>
       <p class="hint" id="syncNote"></p>
     </section>
     <section class="card hidden" id="dueCard" style="padding:12px 4px">
-      <h2 style="padding:0 12px">⏰ Follow-ups due</h2>
+      <h2 style="padding:0 12px">⏰ Tasks due</h2>
       <div id="dueList"></div>
     </section>
-    <section class="card" style="padding:4px"><div id="clientList"></div></section>
-    <button class="btn secondary" id="newClientBtn">＋ Add a client</button>
+    <section class="card" style="padding:12px 4px"><h2 style="padding:0 12px" id="listTitle">Recent clients</h2><div id="clientList"></div></section>
   </div>
 
   <div id="detailView" class="hidden">
     <button class="btn secondary" id="backBtn" style="margin:0 0 14px">← All clients</button>
     <section class="card">
-      <label for="dName">Name</label><input id="dName">
-      <div class="row">
-        <div><label for="dPhone">Phone</label><input id="dPhone" type="tel"></div>
-        <div><label for="dEmail">Email</label><input id="dEmail" type="email"></div>
+      <div class="client" style="padding:0 0 12px;cursor:default">
+        <div class="av" id="dAv"></div>
+        <div class="meta"><div class="nm" id="dTitle"></div><div class="sub" id="dSub"></div></div>
+        <span class="badge" id="dBadge"></span>
       </div>
-      <div class="row">
-        <div><label for="dCompany">Company</label><input id="dCompany"></div>
-        <div><label for="dStatus">Status</label>
-          <select id="dStatus"><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
-      </div>
-      <div class="row">
-        <div><label for="dOwner">Owner</label><input id="dOwner"></div>
-        <div><label for="dFollow">Next follow-up</label><input id="dFollow" type="date"></div>
-      </div>
-      <label for="dNotes">Notes</label><textarea id="dNotes"></textarea>
-      <p class="hint" id="dMeta"></p>
-      <div class="actions">
+      <div class="actions" style="margin-top:0">
         <a class="btn secondary" id="dWa" target="_blank" rel="noopener">💬 WhatsApp</a>
         <a class="btn secondary" id="dCall">📞 Call</a>
         <a class="btn secondary" id="dMail">✉️ Email</a>
       </div>
-      <div class="actions">
-        <a class="btn secondary" id="dRemind" target="_blank" rel="noopener">⏰ Follow-up to calendar</a>
-        <button class="btn secondary" id="dTask">＋ New task</button>
+      <label for="dCompany">Company</label><input id="dCompany">
+      <label for="dName">Contact person</label><input id="dName">
+      <div class="row">
+        <div><label for="dPhone">Phone</label><input id="dPhone" type="tel"></div>
+        <div><label for="dEmail">Email</label><input id="dEmail" type="email"></div>
       </div>
-      <button class="btn primary" id="dSave" style="margin-top:14px">Save client</button>
+      <p class="hint hidden" id="dLocked">Name, phone and email come from AutoCount, so change them there.</p>
+      <div class="row">
+        <div><label for="dStatus">Status</label>
+          <select id="dStatus"><option value="">No status</option><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
+        <div><label for="dOwner">Agent</label><input id="dOwner" list="teamList" autocomplete="off"></div>
+      </div>
+      <datalist id="teamList"></datalist>
+      <label for="dNotes">CRM notes</label><textarea id="dNotes"></textarea>
+      <button class="btn primary" id="dSave" style="margin-top:14px">Save</button>
       <p class="hint" id="dNote"></p>
     </section>
+    <section class="card hidden" id="dPeopleCard">
+      <h2>Contact persons</h2>
+      <div id="dPeople"></div>
+    </section>
     <section class="card">
-      <h2>History</h2>
-      <div id="dHist"></div>
+      <h2>Tasks</h2>
+      <div id="dTasks"></div>
+      <label for="dFollow">Add a follow-up</label>
+      <div class="row">
+        <div><input id="dFollow" type="date"></div>
+        <button class="btn secondary" id="dFollowBtn" style="flex:0 0 auto;width:auto;margin-top:0;padding:10px 14px">⏰ Add</button>
+      </div>
+      <button class="btn secondary" id="dTask">＋ New task from a message</button>
     </section>
   </div>
 </main>

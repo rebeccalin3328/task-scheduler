@@ -1,38 +1,44 @@
-# Client list (CRM) setup
+# CRM setup (airnergy_crm_backend)
 
-Every task you add with a contact also saves that client to one shared Google Sheet. Free, about 5 minutes, done once by one person (Rebecca).
+The app saves clients and tasks into your existing **airnergy_crm_backend** sheet, the same one AppSheet uses. No new tabs or columns.
 
 ```
- WhatsApp msg ─copy─▶ Task Scheduler ─▶ Google Calendar (the task)
+ WhatsApp msg ─copy─▶ Task Scheduler ─▶ Google Calendar (as before)
                            │
-                           └──▶ Google Sheet  ─ "Clients" tab: one row per client
-                                               ─ "History" tab: one row per task
+                           ├─ finds the client by phone / email / company ─▶ Contact + ContactPerson
+                           │      not found? ─▶ new Contact row, Source = "WhatsApp"
+                           ├─ the task ──────▶ Task   (AssignedTo / CreatedBy from the User tab, by email)
+                           ├─ a log line ────▶ Activity
+                           └─ status, agent, notes ─▶ Contact.CRMTags / AssignedAgent / CRMNotes
 ```
 
-## 1. Make the sheet (Rebecca, on a computer)
-1. Go to sheets.new and name it **Team Clients**.
-2. Click **Extensions → Apps Script**.
-3. Delete what's there and paste everything from [`crm-script.gs`](crm-script.gs).
-4. On the line `var TEAM_KEY = 'change-me';`, replace `change-me` with a word only your team knows. Click 💾 Save.
-5. Click **Deploy → New deployment**. Click the ⚙︎ next to "Select type" and choose **Web app**.
+What it never does: delete rows, add tabs or columns, change AutoCount details (name, phone, email, address, credit) on AutoCount contacts, or send User tab data (IC, EPF, bank) to phones.
+
+**Safety net for new WhatsApp contacts:** each one is also saved in the Activity tab. If a sync ever removes it from Contact, the app puts it back (same ContactID) the next time anyone syncs.
+
+## 1. Add the script (Rebecca, once, on a computer, about 5 minutes)
+1. Signed in as admin@airnergy.my, go to **script.google.com** and click **New project**. Name it `Task Scheduler CRM`.
+   (It's a separate project on purpose, so it can't clash with your AutoCount or WhatsApp scripts on the sheet.)
+2. Delete what's in `Code.gs` and paste the whole of [`crm-script.gs`](crm-script.gs). The sheet's ID is already filled in.
+3. On the line `var TEAM_KEY = 'change-me';`, replace `change-me` with a word only your team knows. Click 💾 Save.
+4. Click **Deploy → New deployment**. Click ⚙︎ next to "Select type", then **Web app**.
    - Execute as: **Me**
    - Who has access: **Anyone**
-6. Click **Deploy**, then **Authorize access** and pick your Google account. If you see "Google hasn't verified this app", click **Advanced → Go to (unsafe)**. This is your own script, so it's safe.
-7. Copy the **Web app URL** (it ends in `/exec`).
-8. Share the sheet with your team (Share button, as Editor) so they can also open it in Google Sheets.
+5. Click **Deploy**, then **Authorize access** and choose admin@airnergy.my. If you see "Google hasn't verified this app", click **Advanced → Go to … (unsafe)**. It's your own script.
+6. Copy the **Web app URL** (it ends in `/exec`).
+
+"Anyone" only means the link answers requests. Without the team key it refuses everything, and it only reads or writes the CRM tabs listed above.
 
 ## 2. Connect each phone
 1. Open Task Scheduler and tap ⚙︎.
-2. Paste the **CRM link** (the Web app URL), type the **Team key**, and **Your name**. Tap Save.
-3. Open the **Clients** tab. It should say "Synced".
-
-Send your team the link and key on WhatsApp so they can do step 2.
+2. Paste the **CRM link**, type the **Team key**, and enter **your work email**, which must match your row in the User tab. Tap Save.
+3. Open **Clients**. It should say "Synced … clients".
 
 ## Using it
-- **New task tab:** paste a message as usual. If the contact is already a client, you'll see "✓ Existing client". Set the Company, Status and Next follow-up if you want, then tap Add to team calendar. The client and task are saved to the sheet.
-- **Clients tab:** search, filter by status, and see **Follow-ups due** at the top (the red number on the tab).
-- **Tap a client:** WhatsApp, call or email them, edit notes and status, put the follow-up in the calendar, start a new task, and see their task history.
-- **No signal?** Saves wait on the phone and upload when you're back online.
+- **New task:** paste a message. If the phone, email or company is already in the CRM, you'll see "✓ ALPHA SDN BHD · AutoCount 300-0001". Otherwise it says "New contact". Tap Add to team calendar, and the task goes into the Task tab too. Set **Next follow-up** to add a second "Follow up" task.
+- **Clients tab:** **Tasks due** at the top (the red number), then recent clients. Search any of the clients by company, person, phone or AutoCount number.
+- **Client page:** WhatsApp, call or email; set status (saved in CRMTags), agent and CRM notes; see contact persons; tick tasks done; add a follow-up (also opens Google Calendar).
+- **No signal?** Saves wait on the phone and upload later.
 
-## If you change the script later
+## Changing the script later
 Use **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**, so the link stays the same.
