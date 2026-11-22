@@ -107,17 +107,35 @@
       this.disabled = true;
       note.className = 'chip ok'; note.textContent = 'Saving ' + picked.length + ' tasks…';
       var last;
+      function retry() { CRM.flush().then(done, failed); }
       items(picked, function (j) { return cals[j]; }).forEach(function (it) { last = CRM.queueItem(it); });
       if ($('importCal').value) App.store.set('lastCal', 'c:' + $('importCal').value);
-      last.then(function () {
+      last.then(done, failed);
+      function done(res) {
+        var bad = (res && res.rejected || []).filter(function (r) { return picked.some(function (t) { return r.item.task && r.item.task.ref === t.ref; }); });
+        if (bad.length) {
+          note.className = 'chip warn';
+          note.textContent = 'Added ' + (picked.length - bad.length) + ' of ' + picked.length + ' tasks. Not saved: ' +
+            bad.map(function (r) { return '"' + r.item.task.title + '" (' + r.error + ')'; }).join('; ') + '.';
+          CRM.list(); if (window.CAL) CAL.changed();
+          return;
+        }
         note.textContent = '✓ Added ' + picked.length + ' tasks' + (where ? ' (' + where + ' calendar)' : '') + '.';
         CRM.list();
         if (window.CAL) CAL.changed();
         setTimeout(close, 1500);
-      }, function () {
+      }
+      function failed(err) {
         note.className = 'chip warn';
-        note.textContent = 'Saved on this phone. They will upload to the CRM sheet when you are back online.';
-      });
+        note.textContent = (err && err.kind === 'offline'
+          ? 'No connection to the CRM sheet. '
+          : 'Could not upload yet: ' + (err && err.message || 'unknown error') + '. ') +
+          CRM.waiting() + ' saves are kept on this phone. ';
+        var again = document.createElement('button');
+        again.type = 'button'; again.className = 'btn secondary'; again.textContent = 'Try again now';
+        again.onclick = function () { again.disabled = true; note.textContent = 'Uploading…'; note.className = 'chip ok'; retry(); };
+        note.appendChild(again);
+      }
     };
   }
 

@@ -33,10 +33,22 @@
     var ak = store.get('adminKey', '');
     if (ak) body.adminKey = ak;
     // A text/plain body keeps this a "simple" request, which Google's server accepts from the browser.
+    // Three kinds of failure, told apart so the message says what really happened:
+    // 'offline' (no answer at all), 'page' (Google sent a web page, not data) and 'rejected' (the sheet said no).
     return fetch(c.url, { method: 'POST', body: JSON.stringify(body), keepalive: !!keepalive })
-      .then(function (r) { return r.json(); })
-      .then(function (j) { if (!j.ok) throw new Error(j.error || 'Save failed'); return j; });
+      .catch(function () { throw fail('offline', 'No connection to the CRM sheet'); })
+      .then(function (r) { return r.text().then(function (t) { return { status: r.status, text: t }; }); })
+      .then(function (res) {
+        var j;
+        try { j = JSON.parse(res.text); } catch (e) {
+          console.warn('CRM answered with a page', res.status, res.text.slice(0, 300));
+          throw fail('page', 'The CRM script sent back a Google page instead of data (HTTP ' + res.status + '). It may be busy, or need redeploying');
+        }
+        if (!j.ok) throw fail(j.error === 'Wrong team key' ? 'key' : 'rejected', j.error || 'Save failed');
+        return j;
+      });
   }
+  function fail(kind, msg) { var e = new Error(msg); e.kind = kind; return e; }
 
   // ---- Matching (same order as the sheet: phone, email, company) ----
   function find(q) {
@@ -80,21 +92,34 @@
   var flushing = false;
   var flushP = null;
   // Upload queued saves one by one. Calling it while it runs returns the same run, which ends when the queue is empty.
+  // A save the sheet refuses (for example a calendar you can't use) is set aside in 'crmFailed' instead of blocking
+  // everything after it. The run resolves to { done, rejected: [{ item, error }] }.
   function flush(keepalive) {
     if (flushing) return flushP;
-    flushP = run(keepalive);
+    flushing = true;
+    flushP = run(keepalive, { done: 0, rejected: [] });
     return flushP;
   }
-  function run(keepalive) {
-    if (!queue.length || !cfg().url) { flushing = false; return Promise.resolve(); }
-    flushing = true;
+  function run(keepalive, res) {
+    if (!queue.length || !cfg().url) {
+      flushing = false;
+      if (res.rejected.length) setTimeout(function () { note(res.rejected.length + ' save(s) refused by the CRM sheet: ' + res.rejected[0].error + '.'); }, 3000);
+      return Promise.resolve(res);
+    }
     var item = queue[0];
     return api(item, keepalive).then(function () {
-      queue.shift(); keep('crmQueue2', queue);
-      return run(keepalive);
+      queue.shift(); keep('crmQueue2', queue); res.done++;
+      return run(keepalive, res);
     }, function (err) {
+      if (err.kind === 'rejected') {
+        queue.shift(); keep('crmQueue2', queue);
+        var failed = load('crmFailed', []); failed.push({ item: item, error: err.message, at: Date.now() }); keep('crmFailed', failed);
+        res.rejected.push({ item: item, error: err.message });
+        console.warn('CRM refused a save', err.message, item);
+        return run(keepalive, res);
+      }
       flushing = false;
-      note('Not saved to the CRM sheet yet (' + (err.message === 'no-link' ? 'no CRM link' : err.message) + '). Will retry.');
+      note('Not saved to the CRM sheet yet: ' + (err.message === 'no-link' ? 'no CRM link' : err.message) + '. ' + queue.length + ' waiting on this phone. Will retry.');
       throw err;
     });
   }
@@ -406,7 +431,8 @@
 
   window.CRM = { currentClient: function () { return current; }, lastSaved: function () { return lastSaved; }, flush: function () { return flush(); }, findForm: function () { var q = formClient(); return q ? find(q) : null; }, sync: sync, matchForm: matchForm, render: render, api: api, show: show, cfg: cfg,
     state: function () { return cache; }, openClient: function (id) { var c = byId(id); if (c) open(c); },
-    queueItem: function (item) { queue.push(item); keep('crmQueue2', queue); return flush(); }, list: list };
+    queueItem: function (item) { queue.push(item); keep('crmQueue2', queue); return flush(); }, list: list,
+    waiting: function () { return queue.length; } };
   window.addEventListener('online', sync);
   fillTeam(); fillCalendars(); render(); matchForm();
   if (cfg().url) sync();
