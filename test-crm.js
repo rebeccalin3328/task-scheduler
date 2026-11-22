@@ -19,7 +19,7 @@ function fakeSheet(tabs, patch) {
   const gcals = {};
   const mkCal = (id, name) => {
     const evs = [];
-    const cal = { id, name, evs, getId: () => id, getName: () => name, getColor: () => '#039be5', setName(n) { name = n; },
+    const cal = { id, name, evs, getId: () => id, getName: () => name, getColor: () => '#039be5', setName(n) { name = n; }, setColor(c) { cal.color = c; },
       getEvents: (a, b) => evs.filter(e => !e.gone && e.end > a && e.start < b).map(wrap),
       getEventById: gid => wrap(evs.find(e => e.id === gid)),
       createEvent: (t, s0, e0, o) => wrap(evs[evs.push({ id: 'gev' + evs.length, title: t, start: s0, end: e0, allDay: false, desc: o.description }) - 1]),
@@ -27,7 +27,7 @@ function fakeSheet(tabs, patch) {
     const wrap = e => e && ({ getId: () => e.id, getTitle: () => e.title, getDescription: () => e.desc || '', getLocation: () => '',
       getStartTime: () => e.start, getEndTime: () => e.end, isAllDayEvent: () => e.allDay, setTitle: v => { e.title = v; },
       setDescription: v => { e.desc = v; }, setLocation() {}, setTime: (a, b) => { e.start = a; e.end = b; }, setAllDayDates: (a, b) => { e.start = a; e.end = b; },
-      deleteEvent: () => { e.gone = true; } });
+      deleteEvent: () => { e.gone = true; }, removeAllReminders: () => { e.rem = []; }, addPopupReminder: m => { (e.rem = e.rem || []).push(m); } });
     return (gcals[id] = cal);
   };
   mkCal('sales@group.calendar.google.com', 'Sales');
@@ -203,6 +203,23 @@ as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 
 as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 'Piano exam form', due: '2026-12-01', ref: 'imp1', calendarId: service.id, start: '2026-12-01', end: '2026-12-01', allDay: true } });
 assert.equal(nTasks(), t0, 'reopening the import link does not add the task again');
 assert.equal(nEvents(), e0 + 1, 'but puts it on the chosen calendar once');
+
+// Reminders: Google events get a popup reminder
+assert.deepEqual(G3.gcals['sales@group.calendar.google.com'].evs[0].rem, [240], 'all-day: reminder the evening before');
+as('siti@example.my', { action: 'addEvent', event: { calendarId: sales.id, title: 'Timed', start: '2026-11-25T09:00' } });
+assert.deepEqual(G3.gcals['sales@group.calendar.google.com'].evs[1].rem, [30], 'timed: 30 minutes before');
+G3.gcals['sales@group.calendar.google.com'].evs[1].gone = true;
+
+// Turning an app calendar into a Google Calendar copies its events over, once
+const rayCal = boss({ action: 'saveCalendar', calendar: { name: 'Ray', type: 'App', sharedWith: 'boss@x.my' } }).calendar;
+boss({ action: 'addEvent', event: { calendarId: rayCal.id, title: 'Piano', start: '2026-12-04T19:30', end: '2026-12-04T20:15', ref: 'p1' } });
+const conv = boss({ action: 'saveCalendar', calendar: { id: rayCal.id, name: 'Ray', sharedWith: 'boss@x.my', active: true, toGoogle: true } }).calendar;
+assert.equal(conv.type, 'Google'); assert.ok(G3.gcals[conv.googleId], 'Google Calendar made');
+assert.equal(G3.gcals[conv.googleId].evs.length, 1, 'event copied'); assert.deepEqual(G3.gcals[conv.googleId].evs[0].rem, [30]);
+boss({ action: 'saveCalendar', calendar: { id: rayCal.id, name: 'Ray', sharedWith: 'boss@x.my', active: true, toGoogle: true } });
+assert.equal(G3.gcals[conv.googleId].evs.length, 1, 'not copied twice');
+const rayEv = boss({ action: 'events', from: '2026-12-04', to: '2026-12-05' }).events.filter(e => e.calendarId === rayCal.id);
+assert.equal(rayEv.length, 1, 'shown once, from Google'); assert.ok(/^g:/.test(rayEv[0].id));
 
 const week = email => as(email, { action: 'events', from: '2026-11-23', to: '2026-11-30' }).events.map(e => e.title + '@' + e.start).sort();
 assert.deepEqual(week('ahmad@example.my'), ['Aircond service@2026-11-24T10:00']);

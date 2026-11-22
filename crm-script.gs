@@ -25,6 +25,9 @@ var COPY_EVERY_MINUTES = 60;
 var FILES_FOLDER = 'Task Scheduler Files'; // made in your Google Drive the first time someone uploads
 var FILE_SHARING = 'team';  // 'team' = work emails in the User tab, 'link' = anyone with the link, 'private' = only you
 var MAX_FILE_MB = 20;
+// Phone reminders for events the app puts on Google Calendars (minutes before; 0 = use the calendar's own defaults).
+var REMINDER_MINUTES = 30;          // timed events: 30 minutes before
+var ALL_DAY_REMINDER_MINUTES = 240; // all-day events: 8 pm the evening before
 
 var NEW_SOURCE = 'WhatsApp';     // Contact.Source for people added from the app
 var OPEN_STATUS = 'New';         // Task.Status for new tasks
@@ -427,14 +430,21 @@ function addEvent_(who, ev, contactId, taskId) {
   var title = String(ev.title || 'Event').slice(0, 200), gid = '';
   if (c.type === 'Google') {
     var g = gcal_(c), opt = { description: String(ev.description || ''), location: String(ev.location || '') };
-    var gev = ev.allDay ? g.createAllDayEvent(title, start, new Date(end.getTime() + 86400000), opt) : g.createEvent(title, start, end, opt);
-    gid = gev.getId();
+    gid = gEvent_(g, title, start, end, !!ev.allDay, opt).getId();
   }
   var id = 'E-' + hex_(12), by = who.me ? who.me.name : (who.email || '');
   append_(e, { EventID: id, CalendarID: c.id, Title: title, Description: String(ev.description || '').slice(0, 4000), Start: start, End: end,
     AllDay: !!ev.allDay, Location: String(ev.location || ''), ContactID: contactId || ev.contactId || '', TaskID: taskId || '',
     CreatedBy: by, CreatedAt: new Date(), GoogleEventID: gid, Ref: ev.ref || '' });
   return { id: gid ? 'g:' + c.id + ':' + gid : id, calendarId: c.id, title: title, start: iso_(start), end: iso_(end), allDay: !!ev.allDay };
+}
+
+/** Make a Google Calendar event with a phone (popup) reminder. */
+function gEvent_(g, title, start, end, allDay, opt) {
+  var gev = allDay ? g.createAllDayEvent(title, start, new Date(end.getTime() + 86400000), opt) : g.createEvent(title, start, end, opt);
+  var mins = allDay ? ALL_DAY_REMINDER_MINUTES : REMINDER_MINUTES;
+  if (mins > 0) { try { gev.removeAllReminders(); gev.addPopupReminder(mins); } catch (err) {} }
+  return gev;
 }
 
 function findEvent_(who, id) {
@@ -502,6 +512,7 @@ function saveCalendar_(who, c) {
     if (c.color) setCell_(t, i, 'Color', String(c.color));
     setCell_(t, i, 'SharedWith', shared);
     if (c.active !== undefined) setCell_(t, i, 'IsActive', !!c.active);
+    if (c.toGoogle && calObj_(t, t.rows[i]).type === 'App') toGoogle_(t, i);
     var cur = calObj_(t, t.rows[i]);
     if (cur.type === 'Google' && c.name) { try { gcal_(cur).setName(String(c.name)); } catch (err) {} }
     return cur;
@@ -516,6 +527,23 @@ function saveCalendar_(who, c) {
   var row = append_(t, { CalendarID: 'cal-' + hex_(8), Name: String(c.name || 'New calendar'), Color: c.color || COLORS[t.rows.length % COLORS.length],
     Type: type, GoogleCalendarID: gid, SharedWith: shared || '', IsActive: true, CreatedAt: new Date() });
   return calObj_(t, row);
+}
+
+/** Turn an app calendar into a new Google Calendar (so phones get reminders). Its events are copied over. */
+function toGoogle_(t, i) {
+  var c = calObj_(t, t.rows[i]), g = CalendarApp.createCalendar(c.name);
+  try { g.setColor(c.color); } catch (err) {}
+  var e = tab_('Event');
+  e.rows.forEach(function (r, k) {
+    if (String(r[e.col.CalendarID]) !== c.id || r[e.col.GoogleEventID]) return;
+    var s = r[e.col.Start] instanceof Date ? r[e.col.Start] : parse_(r[e.col.Start]);
+    var en = r[e.col.End] instanceof Date ? r[e.col.End] : (r[e.col.End] ? parse_(r[e.col.End]) : s);
+    var gev = gEvent_(g, String(r[e.col.Title] || 'Event'), s, en < s ? s : en, truthy_(r[e.col.AllDay]),
+      { description: String(r[e.col.Description] || ''), location: String(r[e.col.Location] || '') });
+    setCell_(e, k, 'GoogleEventID', gev.getId());
+  });
+  setCell_(t, i, 'Type', 'Google');
+  setCell_(t, i, 'GoogleCalendarID', g.getId());
 }
 
 // ---------- quick picks: who the task is for, what it's about, and ready-made phrases ----------
