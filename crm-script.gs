@@ -32,6 +32,8 @@ var ALL_DAY_REMINDER_MINUTES = 240; // all-day events: 8 pm the evening before
 var NEW_SOURCE = 'WhatsApp';     // Contact.Source for people added from the app
 var OPEN_STATUS = 'New';         // Task.Status for new tasks
 var DONE_STATUS = 'Done';        // Task.Status when ticked off in the app
+var TASK_STATUSES = ['New', 'In progress', 'Waiting', 'Done', 'Cancelled']; // choices in the app; Done and Cancelled count as closed
+var DELETED_STATUS = 'Deleted';  // deleted tasks keep their row (for the record) but are hidden everywhere
 var STATUS_TAGS = ['Lead', 'Prospect', 'Customer', 'Inactive']; // kept in Contact.CRMTags
 
 function doGet(e) { return out_(handle_(e.parameter || {})); }
@@ -58,6 +60,8 @@ function handle_(req) {
       if (req.action === 'addPick') return { ok: true, picks: addPick_(req.pick || {}, me) };
       if (req.action === 'save') return save_(req.client || {}, req.task, me, who);
       if (req.action === 'done') return done_(req.taskId, me);
+      if (req.action === 'taskStatus') return setTaskStatus_(req.taskId, req.status, me, who);
+      if (req.action === 'deleteTask') return setTaskStatus_(req.taskId, DELETED_STATUS, me, who);
       if (req.action === 'events') return { ok: true, events: events_(who, req.from, req.to) };
       if (req.action === 'addEvent') return { ok: true, event: addEvent_(who, req.event || {}, '', '') };
       if (req.action === 'updateEvent') return { ok: true, event: updateEvent_(who, req.event || {}) };
@@ -173,8 +177,9 @@ function clients_() {
 }
 function tasks_() {
   var t = tab_('Task'), names = userNames_();
-  return t.rows.filter(function (r) { return r[t.col.TaskID]; }).map(function (r) {
+  return t.rows.filter(function (r) { return r[t.col.TaskID] && String(r[t.col.Status]) !== DELETED_STATUS; }).map(function (r) {
     return { id: get_(t, r, 'TaskID'), title: get_(t, r, 'Title'), contactId: get_(t, r, 'ContactID'),
+      role: get_(t, r, 'ForRole'), topic: get_(t, r, 'Topic'),
       due: get_(t, r, 'DueDate'), status: get_(t, r, 'Status'), assignee: names[get_(t, r, 'AssignedTo')] || '',
       by: names[get_(t, r, 'CreatedBy')] || '', created: get_(t, r, 'CreatedAt'), completed: get_(t, r, 'CompletedAt') };
   }).slice(-1500);
@@ -291,6 +296,40 @@ function done_(taskId, me) {
     }
   }
   throw new Error('Task not found');
+}
+
+/** Set a task's status. Closing it fills CompletedAt; deleting it also removes its calendar entries. */
+function setTaskStatus_(taskId, status, me, who) {
+  status = String(status || '');
+  if (status !== DELETED_STATUS && TASK_STATUSES.indexOf(status) < 0) throw new Error('Unknown status: ' + status);
+  var t = tab_('Task');
+  for (var i = 0; i < t.rows.length; i++) {
+    if (String(t.rows[i][t.col.TaskID]) !== String(taskId)) continue;
+    var now = new Date(), closed = status === 'Done' || status === 'Cancelled';
+    setCell_(t, i, 'Status', status);
+    setCell_(t, i, 'CompletedAt', closed || status === DELETED_STATUS ? now : '');
+    append_(tab_('Activity'), { ActivityID: 'A-' + hex_(12), Timestamp: now, UserID: me ? me.id : '', ActionType: status === DELETED_STATUS ? 'Task deleted' : 'Task status',
+      ContactID: t.rows[i][t.col.ContactID], TaskID: taskId, Description: (status === DELETED_STATUS ? 'Deleted' : 'Status set to ' + status) + ' in Task Scheduler' });
+    if (status === DELETED_STATUS) removeTaskEvents_(taskId, who);
+    return { ok: true, status: status };
+  }
+  throw new Error('Task not found');
+}
+function removeTaskEvents_(taskId, who) {
+  var e = tab_('Event');
+  e.rows.forEach(function (r, k) {
+    var cid = String(r[e.col.CalendarID]);
+    if (String(r[e.col.TaskID]) !== String(taskId) || /^deleted:/.test(cid)) return;
+    var gid = String(r[e.col.GoogleEventID] || '');
+    if (gid) {
+      try {
+        var ct = calTab_(), row = ct.rows.filter(function (x) { return String(x[ct.col.CalendarID]) === cid; })[0];
+        var g = row && gcal_(calObj_(ct, row)).getEventById(gid);
+        if (g) g.deleteEvent();
+      } catch (err) {}
+    }
+    setCell_(e, k, 'CalendarID', 'deleted:' + cid);
+  });
 }
 
 // ---------- copying contacts from airnergy_crm_backend ----------

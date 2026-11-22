@@ -221,6 +221,23 @@ assert.equal(G3.gcals[conv.googleId].evs.length, 1, 'not copied twice');
 const rayEv = boss({ action: 'events', from: '2026-12-04', to: '2026-12-05' }).events.filter(e => e.calendarId === rayCal.id);
 assert.equal(rayEv.length, 1, 'shown once, from Google'); assert.ok(/^g:/.test(rayEv[0].id));
 
+// Task status and delete
+const stTask = as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 'Status test', due: '2026-12-02 09:00', ref: 'st1', calendarId: service.id, start: '2026-12-02T09:00' } });
+assert.equal(as('ahmad@example.my', { action: 'taskStatus', taskId: stTask.taskId, status: 'Waiting' }).ok, true);
+let found = as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === stTask.taskId);
+assert.equal(found.status, 'Waiting'); assert.equal(found.completed, '');
+as('ahmad@example.my', { action: 'taskStatus', taskId: stTask.taskId, status: 'Done' });
+assert.ok(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === stTask.taskId).completed, 'closing fills CompletedAt');
+as('ahmad@example.my', { action: 'taskStatus', taskId: stTask.taskId, status: 'In progress' });
+assert.equal(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === stTask.taskId).completed, '', 'reopening clears it');
+assert.equal(as('ahmad@example.my', { action: 'taskStatus', taskId: stTask.taskId, status: 'Bogus' }).ok, false);
+const evBefore = boss({ action: 'events', from: '2026-12-02', to: '2026-12-03' }).events.filter(e => e.taskId === stTask.taskId).length;
+assert.equal(evBefore, 1);
+as('ahmad@example.my', { action: 'deleteTask', taskId: stTask.taskId });
+assert.ok(!as('ahmad@example.my', { action: 'list' }).tasks.some(t => t.id === stTask.taskId), 'deleted task hidden');
+assert.equal(boss({ action: 'events', from: '2026-12-02', to: '2026-12-03' }).events.filter(e => e.taskId === stTask.taskId).length, 0, 'its calendar entry is gone');
+assert.ok(G3.sheets.Task.rows.some(r => r.includes(stTask.taskId) && r.includes('Deleted')), 'row kept, marked Deleted');
+
 const week = email => as(email, { action: 'events', from: '2026-11-23', to: '2026-11-30' }).events.map(e => e.title + '@' + e.start).sort();
 assert.deepEqual(week('ahmad@example.my'), ['Aircond service@2026-11-24T10:00']);
 assert.deepEqual(week('siti@example.my'), ['Meet ABC@2026-11-25T00:00']);

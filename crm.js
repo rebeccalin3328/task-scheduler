@@ -282,19 +282,17 @@
   }
   function render() {
     var q = low($('search').value), st = $('statusFilter').value, qp = phones(q)[0] || (q.replace(/\D/g, '').length >= 4 ? q.replace(/\D/g, '').replace(/^0/, '') : '');
-    var due = cache.tasks.filter(function (t) { return isOpen(t) && dueDay(t) && dueDay(t) <= today(); })
-      .sort(function (a, b) { return dueDay(a) < dueDay(b) ? -1 : 1; });
+    var due = cache.tasks.filter(function (t) { return isOpen(t) && dueDay(t) && dueDay(t) <= today(); });
     $('dueCount').textContent = due.length;
     $('dueCount').classList.toggle('hidden', !due.length);
-    $('dueCard').classList.toggle('hidden', !due.length || !!q || !!st);
+    $('dueCard').classList.toggle('hidden', !cache.tasks.length || !!q || !!st);
+    var show = $('taskShow').value;
+    var list = cache.tasks.filter(function (t) { return show === 'all' ? true : show === 'due' ? due.indexOf(t) >= 0 : isOpen(t); })
+      .sort(byDue);
     var dl = $('dueList'); dl.innerHTML = '';
-    due.slice(0, 30).forEach(function (t) {
-      var c = byId(t.contactId) || { company: 'Unknown client', id: t.contactId };
-      var when = dueDay(t) === today() ? 'today' : dueDay(t);
-      var r = clientRow(c, t.title + ' · ' + when + (t.assignee ? ' · ' + t.assignee : ''));
-      r.querySelector('.sub').classList.add('due');
-      dl.appendChild(r);
-    });
+    if (!list.length) dl.appendChild(el('div', 'empty', show === 'due' ? 'Nothing due. 🎉' : 'No tasks.'));
+    list.slice(0, taskLimit).forEach(function (t) { dl.appendChild(taskRow(t, true)); });
+    $('taskMore').classList.toggle('hidden', list.length <= taskLimit);
     var touch = lastTouch();
     var shown = cache.clients.filter(function (c) {
       if (st === 'New') { if (c.source !== 'WhatsApp') return false; }
@@ -348,30 +346,77 @@
     $('detailView').classList.contains('hidden') && show('detail');
     if (!keepScroll) window.scrollTo(0, 0);
   }
+  // ---- Tasks: status, hide closed, delete ----
+  var STATUSES = ['New', 'In progress', 'Waiting', 'Done', 'Cancelled'];
+  var taskLimit = 30;
+  function byDue(a, b) {
+    if (isOpen(a) !== isOpen(b)) return isOpen(a) ? -1 : 1;
+    if (!isOpen(a)) return String(b.completed || b.created).localeCompare(String(a.completed || a.created));
+    var x = dueDay(a) || '9999', y = dueDay(b) || '9999';
+    return x < y ? -1 : x > y ? 1 : 0;
+  }
+  function taskRow(t, withClient) {
+    var r = el('div', 'task' + (isOpen(t) ? '' : ' closed'));
+    var m = el('div', 'meta'), c = t.contactId ? byId(t.contactId) : null;
+    var tt = el('div', 'tt' + (withClient && c ? ' link' : ''), t.title);
+    if (withClient && c) tt.onclick = function () { open(c); };
+    m.appendChild(tt);
+    var late = isOpen(t) && dueDay(t) && dueDay(t) <= today();
+    var who = withClient ? (c ? c.company : [t.role, t.topic].filter(Boolean).join(' · ')) : '';
+    m.appendChild(el('small', late ? 'due' : '', [t.due ? (dueDay(t) === today() ? 'Today' : 'Due ' + t.due) : '', who, t.assignee].filter(Boolean).join(' · ')));
+    r.appendChild(m);
+    var pending = /^pending-/.test(t.id);
+    var sel = el('select', 'st'); sel.setAttribute('aria-label', 'Status');
+    var cur = STATUSES.indexOf(t.status) >= 0 ? t.status : (isOpen(t) ? 'New' : 'Done');
+    STATUSES.forEach(function (v) { var o = el('option', '', v); o.value = v; sel.appendChild(o); });
+    sel.value = cur; sel.setAttribute('data-s', cur); sel.disabled = pending;
+    sel.onchange = function () { setStatus(t, sel.value); };
+    r.appendChild(sel);
+    var del = el('button', 'del', '🗑'); del.type = 'button'; del.title = 'Delete task'; del.disabled = pending;
+    del.onclick = function () {
+      if (!del.classList.contains('sure')) {
+        del.classList.add('sure'); del.textContent = 'Delete?';
+        setTimeout(function () { del.classList.remove('sure'); del.textContent = '🗑'; }, 3000);
+        return;
+      }
+      removeTask(t);
+    };
+    r.appendChild(del);
+    return r;
+  }
   function renderTasks(c) {
     var box = $('dTasks'); box.innerHTML = '';
-    var ts = cache.tasks.filter(function (t) { return t.contactId === c.id; }).sort(function (a, b) {
-      if (isOpen(a) !== isOpen(b)) return isOpen(a) ? -1 : 1;
-      return isOpen(a) ? (dueDay(a) < dueDay(b) ? -1 : 1) : String(b.created).localeCompare(String(a.created));
-    });
-    if (!ts.length) box.appendChild(el('div', 'empty', 'No tasks yet.'));
-    ts.forEach(function (t) {
-      var r = el('label', 'task' + (isOpen(t) ? '' : ' done'));
-      var cb = el('input'); cb.type = 'checkbox'; cb.checked = !isOpen(t); cb.disabled = !isOpen(t) || /^pending-/.test(t.id);
-      cb.onchange = function () { markDone(t); };
-      r.appendChild(cb);
-      var m = el('div', 'meta'); m.appendChild(el('div', 'tt', t.title));
-      var late = isOpen(t) && dueDay(t) && dueDay(t) <= today();
-      var s = el('small', late ? 'due' : '', [t.due ? 'Due ' + t.due : '', t.assignee, t.status].filter(Boolean).join(' · '));
-      m.appendChild(s); r.appendChild(m); box.appendChild(r);
-    });
+    var all = cache.tasks.filter(function (t) { return t.contactId === c.id; });
+    var hide = $('taskShow').value !== 'all';
+    var ts = all.filter(function (t) { return !hide || isOpen(t); }).sort(byDue);
+    if (!ts.length) box.appendChild(el('div', 'empty', all.length ? 'No open tasks.' : 'No tasks yet.'));
+    ts.forEach(function (t) { box.appendChild(taskRow(t, false)); });
+    var closed = all.length - ts.length;
+    if (closed) {
+      var b = el('button', 'btn secondary', 'Show ' + closed + ' closed'); b.type = 'button'; b.style.marginTop = '8px';
+      b.onclick = function () { $('taskShow').value = 'all'; store.set('taskShow', 'all'); renderTasks(c); render(); };
+      box.appendChild(b);
+    }
   }
-  function markDone(t) {
-    t.status = 'Done'; t.completed = today(); keep('crmCache2', cache);
-    renderTasks(current); render();
-    queue.push({ action: 'done', taskId: t.id }); keep('crmQueue2', queue);
+  function taskChanged(item) {
+    keep('crmCache2', cache);
+    if (current) renderTasks(current);
+    render();
+    if (window.CAL) CAL.changed();
+    queue.push(item); keep('crmQueue2', queue);
     flush().then(list, function () {});
   }
+  function setStatus(t, v) {
+    t.status = v; t.completed = (v === 'Done' || v === 'Cancelled') ? today() : '';
+    taskChanged({ action: 'taskStatus', taskId: t.id, status: v });
+  }
+  function removeTask(t) {
+    cache.tasks = cache.tasks.filter(function (x) { return x !== t; });
+    taskChanged({ action: 'deleteTask', taskId: t.id });
+  }
+  $('taskShow').value = store.get('taskShow', 'open');
+  $('taskShow').onchange = function () { store.set('taskShow', $('taskShow').value); taskLimit = 30; render(); if (current) renderTasks(current); };
+  $('taskMore').onclick = function () { taskLimit += 50; render(); };
   function links() {
     var wa = phones($('dPhone').value)[0], mail = emails($('dEmail').value)[0];
     $('dWa').href = wa ? 'https://wa.me/' + wa : '#';
