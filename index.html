@@ -98,6 +98,17 @@
   .task .meta { flex: 1; min-width: 0; }
   .task.done .tt { text-decoration: line-through; color: var(--muted); }
   .task small { display: block; color: var(--muted); }
+  .task .tt.link { cursor: pointer; }
+  #dueList .task { padding: 10px 12px; }
+  #dueList .empty { padding: 10px 12px; }
+  .task select.st { width: auto; margin: 0; padding: 4px 6px; font-size: 13px; border-radius: 8px; flex: none; max-width: 112px; }
+  .task select.st[data-s="In progress"] { background: #e3f2fd; color: #0d47a1; }
+  .task select.st[data-s="Waiting"] { background: #fff3e0; color: #8a4b00; }
+  .task select.st[data-s="Done"] { background: #e8f5e9; color: #1b5e20; }
+  .task select.st[data-s="Cancelled"] { background: #eeeeee; color: #555; }
+  .task .del { width: auto; flex: none; margin: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; font-size: 13px; color: var(--muted); }
+  .task .del.sure { background: #c62828; color: #fff; border-color: #c62828; }
+  .task.done .tt, .task.closed .tt { text-decoration: line-through; color: var(--muted); }
   .calbar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
   .calbar h2 { flex: 1; margin: 0; font-size: 17px; text-align: center; }
   .calbar button, .calbar select { width: auto; flex: none; margin: 0; padding: 8px 12px; }
@@ -426,9 +437,17 @@
       </div>
       <p class="hint" id="syncNote"></p>
     </section>
-    <section class="card hidden" id="dueCard" style="padding:12px 4px">
-      <h2 style="padding:0 12px">⏰ Tasks due</h2>
+    <section class="card" id="dueCard" style="padding:12px 4px">
+      <div style="display:flex;align-items:center;gap:8px;padding:0 12px">
+        <h2 style="margin:0;flex:1">✅ Tasks</h2>
+        <select id="taskShow" style="width:auto;margin:0;padding:6px 8px;font-size:14px">
+          <option value="open">Open</option>
+          <option value="due">Due and overdue</option>
+          <option value="all">All, with closed</option>
+        </select>
+      </div>
       <div id="dueList"></div>
+      <button class="btn secondary hidden" id="taskMore" style="margin:8px 12px 0;width:calc(100% - 24px)">Show more</button>
     </section>
     <section class="card" style="padding:12px 4px"><h2 style="padding:0 12px" id="listTitle">Recent clients</h2><div id="clientList"></div></section>
   </div>
