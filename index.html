@@ -49,6 +49,29 @@
   .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
   .hidden { display: none; }
   details summary { cursor: pointer; font-weight: 600; }
+  .tabs { display: flex; background: var(--brand); padding: 0 8px; position: sticky; top: 0; z-index: 2; }
+  .tabs button { flex: 1; background: transparent; border: 0; color: var(--brand-ink); opacity: .75; font: inherit; font-weight: 600;
+    padding: 10px 6px 12px; border-bottom: 3px solid transparent; cursor: pointer; }
+  .tabs button.on { opacity: 1; border-bottom-color: var(--brand-ink); }
+  .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: #e53935; color: #fff; font-size: 12px; line-height: 20px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  .client { display: flex; align-items: center; gap: 12px; padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .client:last-child { border-bottom: 0; }
+  .client .av { width: 40px; height: 40px; border-radius: 50%; background: var(--ok-bg); color: var(--ok-ink); display: grid; place-items: center; font-weight: 700; flex: none; }
+  .client .meta { flex: 1; min-width: 0; }
+  .client .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .client .sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { font-size: 12px; font-weight: 600; border-radius: 8px; padding: 2px 8px; flex: none; background: var(--line); color: var(--ink); }
+  .badge.Lead { background: #e3effd; color: #164c8a; } .badge.Prospect { background: var(--warn-bg); color: var(--warn-ink); }
+  .badge.Customer { background: var(--ok-bg); color: var(--ok-ink); } .badge.Inactive { background: var(--line); color: var(--muted); }
+  .due { color: #c62828; font-weight: 600; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .actions a, .actions button { flex: 1; margin-top: 0; padding: 10px 6px; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 4px; }
+  .row > div > label:first-child { margin-top: 12px; }
+  .hist { font-size: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .hist:last-child { border-bottom: 0; }
+  .hist small { color: var(--muted); display: block; }
+  .empty { padding: 16px; text-align: center; color: var(--muted); font-size: 14px; }
   ol { padding-left: 20px; margin: 8px 0 0; font-size: 14px; color: var(--muted); }
 </style>
 </head>
@@ -57,6 +80,10 @@
   <h1>Task Scheduler</h1>
   <button id="settingsBtn" aria-label="Settings" title="Settings">⚙︎</button>
 </header>
+<nav class="tabs">
+  <button id="tabTask" class="on">New task</button>
+  <button id="tabClients">Clients <span id="dueCount" class="count hidden"></span></button>
+</nav>
 <main>
   <section class="card hidden" id="settings">
     <label for="calId">Team calendar ID</label>
@@ -68,8 +95,17 @@
       <option value="60" selected>1 hour</option>
       <option value="120">2 hours</option>
     </select>
+    <label for="crmUrl">CRM link (Google Sheet web app)</label>
+    <input id="crmUrl" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <div class="row">
+      <div><label for="crmKey">Team key</label><input id="crmKey" autocomplete="off"></div>
+      <div><label for="me">Your name</label><input id="me" placeholder="e.g. Rebecca" autocomplete="off"></div>
+    </div>
+    <p class="hint">Ask Rebecca for the CRM link and team key. With them set, every client you add a task for is saved to the team's Google Sheet.</p>
     <button class="btn secondary" id="saveSettings">Save</button>
   </section>
+
+  <div id="taskView">
 
   <div class="row" style="margin-bottom:14px">
     <button class="btn primary" id="pasteBtn" style="flex:2">📋 Paste copied text</button>
@@ -114,6 +150,14 @@
     <input id="cemail" type="email" list="emailList" placeholder="name@company.com" autocomplete="off">
     <datalist id="nameList"></datalist><datalist id="phoneList"></datalist><datalist id="emailList"></datalist>
     <p class="hint" id="contactHint">Saved to the event with a tap-to-chat WhatsApp link.</p>
+    <div class="row">
+      <div><label for="company">Company</label><input id="company" placeholder="Company" autocomplete="off"></div>
+      <div><label for="status">Client status</label>
+        <select id="status"><option value="">Keep as is</option><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
+    </div>
+    <label for="followUp">Next follow-up</label>
+    <input id="followUp" type="date">
+    <p class="hint" id="crmHint"></p>
     <label for="location">Location</label>
     <input id="location" placeholder="Add location">
     <label for="guests">Guests</label>
@@ -145,9 +189,65 @@
       </ol>
     </details>
   </section>
+  </div>
+
+  <div id="clientsView" class="hidden">
+    <section class="card">
+      <input id="search" type="search" placeholder="Search name, phone, company" autocomplete="off">
+      <div class="row" style="margin-top:10px">
+        <div><select id="statusFilter"><option value="">All statuses</option><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
+        <button class="btn secondary" id="syncBtn" style="flex:0 0 auto;width:auto;margin-top:0;padding:10px 14px">↻ Sync</button>
+      </div>
+      <p class="hint" id="syncNote"></p>
+    </section>
+    <section class="card hidden" id="dueCard" style="padding:12px 4px">
+      <h2 style="padding:0 12px">⏰ Follow-ups due</h2>
+      <div id="dueList"></div>
+    </section>
+    <section class="card" style="padding:4px"><div id="clientList"></div></section>
+    <button class="btn secondary" id="newClientBtn">＋ Add a client</button>
+  </div>
+
+  <div id="detailView" class="hidden">
+    <button class="btn secondary" id="backBtn" style="margin:0 0 14px">← All clients</button>
+    <section class="card">
+      <label for="dName">Name</label><input id="dName">
+      <div class="row">
+        <div><label for="dPhone">Phone</label><input id="dPhone" type="tel"></div>
+        <div><label for="dEmail">Email</label><input id="dEmail" type="email"></div>
+      </div>
+      <div class="row">
+        <div><label for="dCompany">Company</label><input id="dCompany"></div>
+        <div><label for="dStatus">Status</label>
+          <select id="dStatus"><option>Lead</option><option>Prospect</option><option>Customer</option><option>Inactive</option></select></div>
+      </div>
+      <div class="row">
+        <div><label for="dOwner">Owner</label><input id="dOwner"></div>
+        <div><label for="dFollow">Next follow-up</label><input id="dFollow" type="date"></div>
+      </div>
+      <label for="dNotes">Notes</label><textarea id="dNotes"></textarea>
+      <p class="hint" id="dMeta"></p>
+      <div class="actions">
+        <a class="btn secondary" id="dWa" target="_blank" rel="noopener">💬 WhatsApp</a>
+        <a class="btn secondary" id="dCall">📞 Call</a>
+        <a class="btn secondary" id="dMail">✉️ Email</a>
+      </div>
+      <div class="actions">
+        <a class="btn secondary" id="dRemind" target="_blank" rel="noopener">⏰ Follow-up to calendar</a>
+        <button class="btn secondary" id="dTask">＋ New task</button>
+      </div>
+      <button class="btn primary" id="dSave" style="margin-top:14px">Save client</button>
+      <p class="hint" id="dNote"></p>
+    </section>
+    <section class="card">
+      <h2>History</h2>
+      <div id="dHist"></div>
+    </section>
+  </div>
 </main>
 
 <script src="parser.js"></script>
+<script src="crm.js" defer></script>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -162,9 +262,16 @@
   $('calId').value = store.get('calId', '');
   $('duration').value = store.get('duration', '60');
   $('settingsBtn').onclick = function () { $('settings').classList.toggle('hidden'); };
+  $('crmUrl').value = store.get('crmUrl', '');
+  $('crmKey').value = store.get('crmKey', '');
+  $('me').value = store.get('me', '');
   $('saveSettings').onclick = function () {
     store.set('calId', $('calId').value.trim());
     store.set('duration', $('duration').value);
+    store.set('crmUrl', $('crmUrl').value.trim());
+    store.set('crmKey', $('crmKey').value.trim());
+    store.set('me', $('me').value.trim());
+    if (window.CRM) CRM.sync();
     $('settings').classList.add('hidden');
     refreshLinks();
   };
@@ -208,6 +315,8 @@
       $('end').value = addMinutes('09:00', +$('duration').value);
     }
     toggleTime();
+    $('company').value = ''; $('status').value = ''; $('followUp').value = '';
+    if (window.CRM) CRM.matchForm();
     chip.classList.remove('hidden');
     if (r.found.date || r.found.time) {
       chip.className = 'chip ok';
@@ -318,6 +427,8 @@
 
   var timer;
   $('msg').addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(detect, 350); });
+  ['contact', 'phone', 'cemail'].forEach(function (id) { $(id).addEventListener('change', function () { if (window.CRM) CRM.matchForm(); }); });
+  window.App = { eventData: eventData, webLink: webLink, refreshLinks: refreshLinks, store: store, pad: pad };
   ['title', 'date', 'endDate', 'start', 'end', 'location', 'guests', 'desc', 'contact', 'phone', 'cemail'].forEach(function (id) { $(id).addEventListener('input', refreshLinks); });
   ['repeat', 'cal', 'busy'].forEach(function (id) { $(id).addEventListener('change', refreshLinks); });
   $('date').addEventListener('change', function () { if (!$('endDate').value || $('endDate').value < $('date').value) $('endDate').value = $('date').value; refreshLinks(); });
@@ -355,6 +466,7 @@
     $('msg').value = ''; $('title').value = ''; $('date').value = '';
     $('allDay').checked = false; $('start').value = ''; $('end').value = '';
     $('endDate').value = ''; $('location').value = ''; $('guests').value = ''; $('contact').value = ''; $('phone').value = ''; $('cemail').value = ''; $('desc').value = '';
+    $('company').value = ''; $('status').value = ''; $('followUp').value = ''; if (window.CRM) CRM.matchForm();
     $('repeat').value = ''; $('busy').value = 'true';
     $('chip').className = 'chip hidden';
     toggleTime(); refreshLinks();
