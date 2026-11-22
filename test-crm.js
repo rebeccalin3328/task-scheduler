@@ -31,12 +31,25 @@ function fakeSheet(tabs, patch) {
     return (gcals[id] = cal);
   };
   mkCal('sales@group.calendar.google.com', 'Sales');
+  // Fake Google Drive
+  const drive = { folders: {} };
+  const mkFolder = name => {
+    const f = { id: 'fold' + Object.keys(drive.folders).length, name, files: [], editors: [], sharing: null };
+    drive.folders[f.id] = f;
+    return { getId: () => f.id, addEditor: e => f.editors.push(e), setSharing: (a, p) => { f.sharing = a + '/' + p; },
+      getFilesByName: n => { const m = f.files.filter(x => x.name === n); return { hasNext: () => m.length > 0 }; },
+      createFile: blob => { const x = Object.assign({ id: 'file' + f.files.length }, blob); f.files.push(x);
+        return { getId: () => x.id, getUrl: () => 'https://drive.google.com/file/d/' + x.id, setDescription: d => { x.desc = d; } }; } };
+  };
+  const folderApi = {};
   let n = 0;
   const ctx = {
     SpreadsheetApp: {
       openById: () => ({ getSheetByName: nm => source[nm] && api(source[nm]) }),
       getActiveSpreadsheet: () => ({ getSheetByName: nm => sheets[nm] && api(sheets[nm]), insertSheet: nm => api(sheets[nm] = { rows: [] }) })
     },
+    DriveApp: { createFolder: n => { const f = mkFolder(n); folderApi[f.getId()] = f; return f; }, getFolderById: id => { if (!folderApi[id]) throw new Error('gone'); return folderApi[id]; },
+      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW' } },
     CalendarApp: { getCalendarById: id => gcals[id] || null, getAllCalendars: () => Object.values(gcals),
       createCalendar: name => mkCal('new' + Object.keys(gcals).length + '@group.calendar.google.com', name) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
@@ -46,6 +59,8 @@ function fakeSheet(tabs, patch) {
       formatDate: (d, tz, f) => { const p = x => String(x).padStart(2, '0');
         return f.replace('yyyy', d.getFullYear()).replace('MM', p(d.getMonth() + 1)).replace('dd', p(d.getDate()))
           .replace('HH', p(d.getHours())).replace('mm', p(d.getMinutes())); },
+      base64Decode: s => Array.from(Buffer.from(s, 'base64')),
+      newBlob: (bytes, mime, name) => ({ bytes, mime, name }),
       getUuid: () => (++n).toString(16).padStart(8, '0') + '-aaaa-bbbb-cccc-dddddddddddd'
     },
     Session: { getScriptTimeZone: () => 'Asia/Kuala_Lumpur' }, JSON, String, Object, Math, Date
@@ -53,7 +68,7 @@ function fakeSheet(tabs, patch) {
   vm.createContext(ctx);
   const code = fs.readFileSync(__dirname + '/crm-script.gs', 'utf8');
   vm.runInContext(patch ? patch(code) : code, ctx);
-  return { sheets, source, props, gcals, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
+  return { sheets, source, props, gcals, drive, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
 }
 
 const tabs = {
@@ -123,7 +138,7 @@ assert.equal(rows('Task')[1][10], 'Done');
 
 // The master sheet was never written to
 assert.equal(JSON.stringify(Object.fromEntries(Object.entries(G.source).map(([k, v]) => [k, v.rows]))), masterBefore, 'airnergy_crm_backend unchanged');
-assert.deepEqual(Object.keys(G.sheets).sort(), ['Activity', 'Calendar', 'Contact', 'ContactPerson', 'Task'], 'CRM sheet has only the CRM tabs (no User copy)');
+assert.deepEqual(Object.keys(G.sheets).sort(), ['Activity', 'Calendar', 'Contact', 'ContactPerson', 'File', 'Picklist', 'Task'], 'CRM sheet has only the CRM tabs (no User copy)');
 
 // Hourly copy: master changes flow in, CRM notes and WhatsApp contacts are kept
 G.source.Contact.rows[1][5] = '+6012-0000000';           // AutoCount phone changed
@@ -209,5 +224,42 @@ assert.equal(seen('ahmad@example.my'), 'Projects,Team');
 assert.equal(seen('siti@example.my'), 'Projects,Sales,Service,Team');
 assert.equal(JSON.stringify(Object.fromEntries(Object.entries(G3.source).map(([k, v]) => [k, v.rows]))), JSON.stringify(tabs3), 'master still unchanged');
 
+
+// ---------- Quick picks ----------
+let P = call({ action: 'list' }).picks;
+assert.deepEqual(P.roles.map(r => r.name), ['Customer', 'Supplier', 'Staff', 'Your child', 'Husband']);
+assert.ok(P.topics['Your child'].includes('Piano Lesson')); assert.ok(P.phrases['*'].includes('Follow up'));
+P = call({ action: 'addPick', pick: { type: 'role', value: 'Landlord', saveContact: false } }).picks;
+P = call({ action: 'addPick', pick: { type: 'topic', role: 'Your child', value: 'Chinese Subject' } }).picks;
+P = call({ action: 'addPick', pick: { type: 'topic', role: 'your child', value: 'piano lesson' } }).picks; // duplicate
+assert.ok(P.roles.some(r => r.name === 'Landlord' && !r.saveContact));
+assert.equal(P.topics['Your child'].filter(x => /piano/i.test(x)).length, 1);
+assert.ok(P.topics['Your child'].includes('Chinese Subject'));
+const tk = call({ action: 'save', client: { phone: '012-322 3360' }, task: { title: 'Piano Lesson: Pay fees', due: '2026-11-27', ref: 'p1', role: 'Your child', topic: 'Piano Lesson' } });
+const trow = rows('Task').find(r => r[0] === tk.taskId);
+assert.equal(trow[14], 'Your child'); assert.equal(trow[15], 'Piano Lesson');
+
+const before = rows('Contact').length;
+const fam = call({ action: 'save', client: { none: true }, task: { title: 'Swimming Lessons: Bring', due: '2026-11-28', ref: 'p2', role: 'Your child', topic: 'Swimming Lessons' } });
+assert.ok(fam.ok && fam.taskId && !fam.id); assert.equal(rows('Contact').length, before, 'family task adds no contact');
+
+// ---------- Files ----------
+const b64 = Buffer.from('%PDF-1.4 hello').toString('base64');
+let up = call({ action: 'upload', file: { name: 'exam form (1).pdf', mime: 'application/pdf', data: 'data:application/pdf;base64,' + b64,
+  taskRef: 'p1', role: 'Your child', topic: 'Piano Lesson', title: 'Piano Lesson: Pay fees', date: '2026-11-27', ref: 'u1' } });
+assert.ok(up.ok, up.error);
+const clientName = G.sheets.Contact.rows.find(r => r[0] === rows('Task').find(t => t[0] === tk.taskId)[3])[3].replace(/ /g, '-');
+assert.equal(up.file.name, '2026-11-27_Your-child_Piano-Lesson_Pay-fees_exam-form-(1)_' + clientName + '.pdf');
+assert.equal(up.file.taskId, tk.taskId, 'linked to the task saved earlier, found by its reference'); assert.ok(up.file.contactId);
+const folder = Object.values(G.drive.folders)[0];
+assert.equal(folder.name, 'Task Scheduler Files'); assert.deepEqual(folder.editors, ['rebecca@example.my'], 'shared with the team by work email');
+assert.equal(folder.files[0].mime, 'application/pdf'); assert.equal(Buffer.from(folder.files[0].bytes).toString(), '%PDF-1.4 hello');
+call({ action: 'upload', file: { name: 'exam form (1).pdf', data: b64, taskRef: 'p1', ref: 'u1' } }); // resend: no duplicate
+up = call({ action: 'upload', file: { name: 'exam form (1).pdf', mime: 'application/pdf', data: b64, taskRef: 'p1', role: 'Your child', topic: 'Piano Lesson', title: 'Piano Lesson: Pay fees', date: '2026-11-27', ref: 'u2' } });
+assert.equal(up.file.name, '2026-11-27_Your-child_Piano-Lesson_Pay-fees_exam-form-(1)_' + clientName + '-2.pdf', 'same name gets -2');
+up = call({ action: 'upload', file: { name: 'IMG_2031.JPG', mime: 'image/jpeg', data: b64, contactId: 'c-bbbbbbbbbbbb', title: 'Re: Site photos / roof', date: '2026-11-30', ref: 'u3' } });
+assert.equal(up.file.name, '2026-11-30_Site-photos-roof_BETA-ENGINEERING.JPG');
+assert.equal(folder.files.length, 3);
+assert.equal(call({ action: 'list' }).files.length, 3);
 
 console.log('CRM sheet script: all checks passed');

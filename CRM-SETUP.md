@@ -26,7 +26,7 @@ The app uses a **new CRM sheet** for everything it saves. Your **airnergy_crm_ba
 4. Click **Deploy → New deployment**. Click ⚙︎ next to "Select type", then **Web app**.
    - Execute as: **Me**
    - Who has access: **Anyone**
-5. Click **Deploy**, then **Authorize access** and choose admin@airnergy.my. If you see "Google hasn't verified this app", click **Advanced → Go to … (unsafe)**. It's your own script. Google will ask for access to your spreadsheets (to read airnergy_crm_backend) and your calendars (for linked Google Calendars).
+5. Click **Deploy**, then **Authorize access** and choose admin@airnergy.my. If you see "Google hasn't verified this app", click **Advanced → Go to … (unsafe)**. It's your own script. Google will ask for access to your spreadsheets (to read airnergy_crm_backend), your calendars (for linked Google Calendars) and your Drive (to save uploaded files).
 6. Copy the **Web app URL** (it ends in `/exec`).
 7. Share the CRM sheet with your team as Editor if they should see it in Google Sheets too.
 
@@ -56,6 +56,19 @@ Team members only see, and can only add to, the calendars shared with them.
  Siti        ✓                           ✓
  Ahmad       ✓            ✓
 ```
+
+## Quick picks
+After pasting a message, tap **Who is this task for?** (Customer, Supplier, Staff, Your child, Husband…), then **What is it about?** (for Your child: SRI KL International School, Tuition Center, ECA, Piano Lesson, Swimming Lessons, Homework, Project, English Subject…), then a **quick phrase** (Pay fees, Pick up, Bring…). The task title becomes "Piano Lesson: Pay fees".
+
+- Tap **＋ New role** or **＋ Add** to add your own. Additions are saved in the CRM sheet's **Picklist** tab and shared with the team. You can also edit that tab directly.
+- Only roles marked as clients (Customer, Supplier, and any new role you tick) are saved to the client list. Family and staff tasks are saved as tasks only.
+
+## Files
+Tap **📎 Attach files** on a task, or **📎 Add files** on a client page. Any format works (photos, PDF, Word, Excel…), up to 20 MB each.
+
+- Files go to a new Google Drive folder, **Task Scheduler Files**, made the first time someone uploads. It's shared only with the work emails in the User tab. If you add people later, run `shareFilesFolderAgain` once from the Apps Script editor.
+- Each file gets a readable name: `date_who_topic_task_file_client`, for example `2026-11-27_Your-child_Piano-Lesson_Pay-fees_exam-form.pdf` or `2026-11-30_Customer_Site-survey_site-photos_ALPHA-SDN-BHD.jpg`. Camera names like IMG_2031 are left out.
+- Each file is listed in the CRM sheet's **File** tab, with its task and client, and appears on the client page and the calendar event.
 
 ## Look and feel
 Each person picks a style in ⚙︎ → **Look and feel**: Classic, Rainbow (kids), Big & Clear (larger text), Professional, Night or Pastel. The choice is saved on their own phone.

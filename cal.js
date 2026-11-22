@@ -262,6 +262,6 @@
     }, function (err) { $('admSave').disabled = false; $('admNote').textContent = 'Not saved: ' + err.message; });
   };
 
-  window.CAL = { changed: function () { loadedKey = ''; if (!$('calView').classList.contains('hidden')) fetchEvents(true); else chips(); } };
+  window.CAL = { editing: function () { return editing; }, changed: function () { loadedKey = ''; if (!$('calView').classList.contains('hidden')) fetchEvents(true); else chips(); } };
   render();
 })();

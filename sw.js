@@ -1,6 +1,6 @@
 // Caches the app so it opens instantly and works offline.
-const CACHE = 'task-scheduler-v9';
-const FILES = ['./', './index.html', './parser.js', './crm.js', './cal.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE = 'task-scheduler-v11';
+const FILES = ['./', './index.html', './parser.js', './crm.js', './cal.js', './picks.js', './files.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
 });

@@ -104,6 +104,9 @@
   .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; }
   .chips button { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 16px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
   .chips button.off { opacity: .45; text-decoration: line-through; }
+  .chips.wrap { flex-wrap: wrap; overflow: visible; padding-bottom: 0; }
+  .chips button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chips button.add { border-style: dashed; color: var(--accent); }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
   .month { display: grid; grid-template-columns: repeat(7, 1fr); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
   .month .dow { font-size: 11px; font-weight: 600; color: var(--muted); text-align: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
@@ -182,6 +185,13 @@
   .theme .body { padding: 8px 10px; }
   .theme b { display: block; font-size: 14px; }
   .theme small { display: block; font-size: 12px; color: #555; line-height: 1.3; }
+  .file { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--ink); text-decoration: none; }
+  .file:last-child { border-bottom: 0; }
+  .file .ic { font-size: 22px; flex: none; }
+  .file .meta { flex: 1; min-width: 0; }
+  .file .nm { font-weight: 600; word-break: break-all; }
+  .file small { display: block; color: var(--muted); }
+  .file .x { border: 0; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; }
   .empty { padding: 16px; text-align: center; color: var(--muted); font-size: 14px; }
   ol { padding-left: 20px; margin: 8px 0 0; font-size: 14px; color: var(--muted); }
 </style>
@@ -232,6 +242,23 @@
     <label for="msg">Message</label>
     <textarea id="msg" placeholder="Copy a WhatsApp message or an email, then tap Paste above."></textarea>
     <div id="chip" class="chip hidden"></div>
+  </section>
+
+  <section class="card" id="pickCard">
+    <label>Who is this task for?</label>
+    <div class="chips wrap" id="roleChips"></div>
+    <div id="topicWrap" class="hidden"><label id="topicLabel">What is it about?</label><div class="chips wrap" id="topicChips"></div></div>
+    <div id="phraseWrap" class="hidden"><label>Quick phrases</label><div class="chips wrap" id="phraseChips"></div></div>
+    <div id="addBox" class="hidden">
+      <label for="addInput" id="addLabel">Add new</label>
+      <div class="row">
+        <div><input id="addInput" autocomplete="off" maxlength="80"></div>
+        <button class="btn primary" id="addOk" style="flex:0 0 auto;width:auto;padding:10px 16px;font-size:15px">Add</button>
+        <button class="btn secondary" id="addCancel" style="flex:0 0 auto;width:auto;margin-top:0;padding:10px 14px" aria-label="Cancel">✕</button>
+      </div>
+      <label class="check hidden" id="addContactRow"><input type="checkbox" id="addContact"> These people are clients (save them in the client list)</label>
+    </div>
+    <p class="hint" id="pickHint">Tap to choose. Your choices are saved with the task, and anything you add is shared with the team.</p>
   </section>
 
   <section class="card">
@@ -289,6 +316,13 @@
     <p class="hint">Reminders, colour, visibility and Google Meet can't be sent from here. Set them on Google Calendar's screen before you tap Save.</p>
   </section>
 
+  <section class="card" id="attachCard">
+    <label for="attachInput">📎 Attach files (photos, PDF, Word, Excel…)</label>
+    <input id="attachInput" type="file" multiple>
+    <div id="attachList"></div>
+    <p class="hint" id="attachHint">Saved to the team's Drive folder with a clear name, and linked to this task and client.</p>
+  </section>
+
   <a class="btn primary" id="addBtn" href="#" target="_blank" rel="noopener">Add to team calendar</a>
   <a class="btn secondary" id="appBtn" href="#">Open in Calendar app instead</a>
   <p class="hint" id="calNote"></p>
@@ -340,6 +374,7 @@
       <label for="evLoc">Location</label><input id="evLoc">
       <label for="evDesc">Notes</label><textarea id="evDesc"></textarea>
       <p class="hint" id="evMeta"></p>
+      <div id="evFiles"></div>
       <button class="btn secondary hidden" id="evClient">👤 Open client</button>
       <button class="btn primary" id="evSave" style="margin-top:14px">Save</button>
       <button class="btn secondary hidden" id="evDelete" style="color:#c62828">Delete</button>
@@ -432,6 +467,13 @@
       <div id="dPeople"></div>
     </section>
     <section class="card">
+      <h2>Files</h2>
+      <div id="dFiles"></div>
+      <label for="dAttach">📎 Add files</label>
+      <input id="dAttach" type="file" multiple>
+      <p class="hint" id="dAttachNote"></p>
+    </section>
+    <section class="card">
       <h2>Tasks</h2>
       <div id="dTasks"></div>
       <label for="dFollow">Add a follow-up</label>
@@ -447,6 +489,8 @@
 <script src="parser.js"></script>
 <script src="crm.js" defer></script>
 <script src="cal.js" defer></script>
+<script src="picks.js" defer></script>
+<script src="files.js" defer></script>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -539,6 +583,7 @@
     toggleTime();
     $('company').value = ''; $('status').value = ''; $('followUp').value = '';
     if (window.CRM) CRM.matchForm();
+    if (window.PICKS) PICKS.parsed();
     chip.classList.remove('hidden');
     if (r.found.date || r.found.time) {
       chip.className = 'chip ok';
@@ -585,6 +630,9 @@
   }
   function withContact(desc) {
     var name = $('contact').value.trim(), phone = $('phone').value.trim(), mail = $('cemail').value.trim();
+    var pk = window.PICKS ? PICKS.current() : {};
+    var forLine = pk.role ? 'For: ' + [pk.role, pk.topic].filter(Boolean).join(' · ') : '';
+    if (forLine) desc = (desc ? desc + '\n\n' : '') + forLine;
     if (!name && !phone && !mail) return desc;
     var lines = ['Contact: ' + [name, phone, mail].filter(Boolean).join(' · ')];
     var wa = TaskParser.waNumber(phone);

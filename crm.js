@@ -78,13 +78,20 @@
 
   // ---- Upload queue ----
   var flushing = false;
+  var flushP = null;
+  // Upload queued saves one by one. Calling it while it runs returns the same run, which ends when the queue is empty.
   function flush(keepalive) {
-    if (flushing || !queue.length || !cfg().url) return Promise.resolve();
+    if (flushing) return flushP;
+    flushP = run(keepalive);
+    return flushP;
+  }
+  function run(keepalive) {
+    if (!queue.length || !cfg().url) { flushing = false; return Promise.resolve(); }
     flushing = true;
     var item = queue[0];
     return api(item, keepalive).then(function () {
-      queue.shift(); keep('crmQueue2', queue); flushing = false;
-      return flush(keepalive);
+      queue.shift(); keep('crmQueue2', queue);
+      return run(keepalive);
     }, function (err) {
       flushing = false;
       note('Not saved to the CRM sheet yet (' + (err.message === 'no-link' ? 'no CRM link' : err.message) + '). Will retry.');
@@ -100,7 +107,9 @@
     if (!cfg().url) { note('Tap ⚙︎ and add the CRM link to see the team\'s clients.'); return Promise.resolve(); }
     note('Syncing…');
     return api({ action: 'list' }).then(function (j) {
-      cache = { clients: j.clients, tasks: j.tasks, team: j.team || [], me: j.me || '', calendars: j.calendars || [], isAdmin: !!j.isAdmin, at: Date.now() };
+      cache = { clients: j.clients, tasks: j.tasks, team: j.team || [], me: j.me || '', calendars: j.calendars || [], isAdmin: !!j.isAdmin, picks: j.picks || null, files: j.files || [], at: Date.now() };
+      if (window.FILES) FILES.refresh();
+      if (window.PICKS) PICKS.refresh();
       fillCalendars();
       if (window.CAL) CAL.changed();
       queue.forEach(function (q) { if (q.action === 'save') applyLocal(q.client, q.task); });
@@ -141,14 +150,21 @@
       hint.textContent = 'New contact. Added to the CRM as a WhatsApp contact when you add the task.';
     }
   }
+  var lastSaved = null;
   function inAppCal() { var v = $('cal').value; return v.indexOf('c:') === 0 ? v.slice(2) : ''; }
   function recordTask(e) {
     var q = formClient(), ev = A.eventData(), calId = inAppCal();
+    var pk = window.PICKS ? PICKS.current() : {};
+    // Roles that aren't clients (family, staff...) never go into the client list.
+    if (pk.role && !pk.saveContact) q = { none: true };
+    else if (!q && pk.role) q = { none: true };
     if (calId && e && e.currentTarget === $('appBtn')) return; // just a phone reminder; the save happens on the main button
     if (calId && e) e.preventDefault();
     if (!ev || !cfg().url) { if (calId) $('calNote').textContent = 'Fill in a date first.'; return; }
     var due = $('date').value + ($('allDay').checked ? '' : ' ' + $('start').value);
     var ref = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    lastSaved = { ref: ref, title: ev.title, date: $('date').value, role: (window.PICKS ? PICKS.current().role : ''), topic: (window.PICKS ? PICKS.current().topic : ''),
+      client: (q && !q.none) ? ((find(q) || {}).company || q.company || q.name || '') : '', withTask: !!(q || pk.role) };
     var desc = [$('desc').value.trim(), $('msg').value.trim() ? 'Message:\n' + $('msg').value.trim() : ''].filter(Boolean).join('\n\n');
     var slot = calId ? { calendarId: calId, start: $('date').value + ($('allDay').checked ? '' : 'T' + $('start').value),
       end: ($('endDate').value || $('date').value) + ($('allDay').checked ? '' : 'T' + $('end').value), allDay: $('allDay').checked,
@@ -161,10 +177,10 @@
       done('Added to the ' + calName(calId) + ' calendar.');
       return;
     }
-    var item = { action: 'save', client: q, task: Object.assign({ title: ev.title, due: due, description: desc, ref: ref }, slot) };
-    applyLocal(q, item.task);
+    var item = { action: 'save', client: q, task: Object.assign({ title: ev.title, due: due, description: desc, ref: ref, role: pk.role || '', topic: pk.topic || '' }, slot) };
+    if (!q.none) applyLocal(q, item.task);
     var jobs = [item];
-    if ($('followUp').value) {
+    if ($('followUp').value && !q.none) {
       var known = find(q) || {};
       var f = { action: 'save', client: q, task: { title: 'Follow up: ' + (known.company || q.company || q.name || q.phone), due: $('followUp').value, ref: ref + 'f' } };
       applyLocal(q, f.task); jobs.push(f);
@@ -172,7 +188,7 @@
     jobs.forEach(function (j) { queue.push(j); });
     keep('crmQueue2', queue);
     render();
-    if (calId) done('Added to the ' + calName(calId) + ' calendar' + (q ? ' and to the client\'s record' : '') + '.');
+    if (calId) done('Added to the ' + calName(calId) + ' calendar' + (q.none ? '' : ' and to the client\'s record') + '.');
     else flush(true).then(list, function () {});
   }
   function calName(id) { var c = (cache.calendars || []).filter(function (x) { return x.id === id; })[0]; return c ? c.name : ''; }
@@ -302,6 +318,7 @@
     });
     $('dPeopleCard').classList.toggle('hidden', !(c.people || []).length);
     renderTasks(c);
+    if (window.FILES) FILES.refresh();
     links();
     $('detailView').classList.contains('hidden') && show('detail');
     if (!keepScroll) window.scrollTo(0, 0);
@@ -387,7 +404,7 @@
     show('task'); matchForm(); A.refreshLinks(); $('msg').focus();
   };
 
-  window.CRM = { sync: sync, matchForm: matchForm, render: render, api: api, show: show, cfg: cfg,
+  window.CRM = { currentClient: function () { return current; }, lastSaved: function () { return lastSaved; }, flush: function () { return flush(); }, findForm: function () { var q = formClient(); return q ? find(q) : null; }, sync: sync, matchForm: matchForm, render: render, api: api, show: show, cfg: cfg,
     state: function () { return cache; }, openClient: function (id) { var c = byId(id); if (c) open(c); },
     queueItem: function (item) { queue.push(item); keep('crmQueue2', queue); return flush(); }, list: list };
   window.addEventListener('online', sync);

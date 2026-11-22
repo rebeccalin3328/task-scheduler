@@ -22,6 +22,9 @@ var TEAM_KEY = 'change-me';
 var ADMIN_KEY = 'change-me-too'; // only Rebecca: lets the app create, link and share calendars
 var SOURCE_ID = '1zwAriAqdWsEjeR5TzSpMYy5B2R5v_kTGFG0adR3t6y4'; // airnergy_crm_backend (read only)
 var COPY_EVERY_MINUTES = 60;
+var FILES_FOLDER = 'Task Scheduler Files'; // made in your Google Drive the first time someone uploads
+var FILE_SHARING = 'team';  // 'team' = work emails in the User tab, 'link' = anyone with the link, 'private' = only you
+var MAX_FILE_MB = 20;
 
 var NEW_SOURCE = 'WhatsApp';     // Contact.Source for people added from the app
 var OPEN_STATUS = 'New';         // Task.Status for new tasks
@@ -47,7 +50,9 @@ function handle_(req) {
       var admin = !!req.adminKey && String(req.adminKey) === ADMIN_KEY && ADMIN_KEY !== 'change-me-too';
       var who = { me: me, email: low_(req.me), admin: admin };
       if (req.action === 'list') return { ok: true, me: me ? me.name : '', team: team_(), clients: clients_(), tasks: tasks_(),
-        calendars: calendars_(who), isAdmin: admin };
+        calendars: calendars_(who), isAdmin: admin, picks: picks_(), files: files_() };
+      if (req.action === 'upload') return { ok: true, file: upload_(req.file || {}, me) };
+      if (req.action === 'addPick') return { ok: true, picks: addPick_(req.pick || {}, me) };
       if (req.action === 'save') return save_(req.client || {}, req.task, me, who);
       if (req.action === 'done') return done_(req.taskId, me);
       if (req.action === 'events') return { ok: true, events: events_(who, req.from, req.to) };
@@ -65,7 +70,9 @@ function handle_(req) {
 
 // ---------- sheet helpers ----------
 var HEADERS = {
-  Task: ['TaskID', 'Title', 'Description', 'ContactID', 'LeadID', 'ServiceJobID', 'AssignedTo', 'CreatedBy', 'DueDate', 'Priority', 'Status', 'BlockedReason', 'CompletedAt', 'CreatedAt'],
+  Task: ['TaskID', 'Title', 'Description', 'ContactID', 'LeadID', 'ServiceJobID', 'AssignedTo', 'CreatedBy', 'DueDate', 'Priority', 'Status', 'BlockedReason', 'CompletedAt', 'CreatedAt', 'ForRole', 'Topic'],
+  File: ['FileID', 'FileName', 'OriginalName', 'DriveFileID', 'Url', 'MimeType', 'SizeKB', 'TaskID', 'ContactID', 'Role', 'Topic', 'UploadedBy', 'UploadedAt', 'Ref'],
+  Picklist: ['Type', 'Role', 'Value', 'SaveContact', 'CreatedBy', 'CreatedAt'],
   Calendar: ['CalendarID', 'Name', 'Color', 'Type', 'GoogleCalendarID', 'SharedWith', 'IsActive', 'CreatedAt'],
   Event: ['EventID', 'CalendarID', 'Title', 'Description', 'Start', 'End', 'AllDay', 'Location', 'ContactID', 'TaskID', 'CreatedBy', 'CreatedAt', 'GoogleEventID', 'Ref'],
   Activity: ['ActivityID', 'Timestamp', 'UserID', 'ActionType', 'ContactID', 'LeadID', 'TaskID', 'ServiceJobID', 'Description', 'Attachment']
@@ -204,8 +211,10 @@ function byId_(c, id, how) {
 
 function save_(q, task, me, who) {
   var c = tab_('Contact'), p = tab_('ContactPerson');
-  var hit = find_(c, p, q), id, created = false;
-  if (!hit) {
+  var hit = q.none ? null : find_(c, p, q), id = '', created = false;
+  if (q.none) {
+    // Not a client (for example a family member): only the task and calendar event are saved.
+  } else if (!hit) {
     if (!q.name && !q.phone && !q.email && !q.company) throw new Error('No name, phone or email');
     id = 'c-' + hex_(12);
     append_(c, { ContactID: id, Source: NEW_SOURCE, CompanyName: q.company || q.name || q.phone || q.email, PIC: q.name || '',
@@ -259,7 +268,8 @@ function addTask_(contactId, task, me) {
   var due = task.due ? new Date(task.due.replace(' ', 'T') + (task.due.length <= 10 ? 'T00:00:00' : ':00')) : '';
   var uid = me ? me.id : '';
   append_(t, { TaskID: taskId, Title: String(task.title).slice(0, 200), Description: String(task.description || '').slice(0, 4000),
-    ContactID: contactId, AssignedTo: uid, CreatedBy: uid, DueDate: due, Priority: 'Normal', Status: OPEN_STATUS, CreatedAt: now });
+    ContactID: contactId, AssignedTo: uid, CreatedBy: uid, DueDate: due, Priority: 'Normal', Status: OPEN_STATUS, CreatedAt: now,
+    ForRole: String(task.role || ''), Topic: String(task.topic || '') });
   append_(a, { ActivityID: 'A-' + hex_(12), Timestamp: now, UserID: uid, ActionType: 'Task', ContactID: contactId, TaskID: taskId,
     Description: 'Added from Task Scheduler: ' + String(task.title).slice(0, 200) + ' ' + tag + ' [task:' + taskId + ']' });
   return taskId;
@@ -506,4 +516,146 @@ function saveCalendar_(who, c) {
   var row = append_(t, { CalendarID: 'cal-' + hex_(8), Name: String(c.name || 'New calendar'), Color: c.color || COLORS[t.rows.length % COLORS.length],
     Type: type, GoogleCalendarID: gid, SharedWith: shared || '', IsActive: true, CreatedAt: new Date() });
   return calObj_(t, row);
+}
+
+// ---------- quick picks: who the task is for, what it's about, and ready-made phrases ----------
+// Type Role: Value = role name, SaveContact = TRUE if people with this role belong in the client list.
+// Type Topic / Phrase: Role = the role it belongs to ("*" = every role).
+var DEFAULT_PICKS = {
+  roles: [['Customer', true], ['Supplier', true], ['Staff', false], ['Your child', false], ['Husband', false]],
+  topics: {
+    'Customer': ['Quotation', 'Site survey', 'Installation', 'Service / maintenance', 'Repair', 'Payment collection', 'Complaint'],
+    'Supplier': ['Quotation', 'Purchase order', 'Delivery', 'Invoice', 'Payment', 'Warranty / return'],
+    'Staff': ['Site visit', 'Service job', 'Meeting', 'Training', 'Leave', 'Claims', 'Report'],
+    'Your child': ['SRI KL International School', 'Tuition Center', 'ECA', 'Piano Lesson', 'Swimming Lessons', 'Homework', 'Project', 'English Subject'],
+    'Husband': ['Family event', 'Dinner', 'Bills', 'Car service', 'Travel', 'Anniversary']
+  },
+  phrases: {
+    '*': ['Call', 'Follow up', 'Reminder'],
+    'Customer': ['Send quotation', 'Call back', 'Schedule site visit', 'Collect payment'],
+    'Supplier': ['Request quotation', 'Confirm delivery date', 'Make payment'],
+    'Staff': ['Please follow up', 'Submit report', 'Meeting at office'],
+    'Your child': ['Pay fees', 'Pick up', 'Bring', 'Submit homework', 'Parent-teacher meeting', 'Practice'],
+    'Husband': ['Remind', 'Pay', 'Book']
+  }
+};
+function pickTab_() {
+  var t = tab_('Picklist');
+  if (!t.rows.length) {
+    var now = new Date(), rows = [];
+    DEFAULT_PICKS.roles.forEach(function (r) { rows.push(['Role', '', r[0], r[1], 'Starter list', now]); });
+    Object.keys(DEFAULT_PICKS.topics).forEach(function (r) { DEFAULT_PICKS.topics[r].forEach(function (v) { rows.push(['Topic', r, v, '', 'Starter list', now]); }); });
+    Object.keys(DEFAULT_PICKS.phrases).forEach(function (r) { DEFAULT_PICKS.phrases[r].forEach(function (v) { rows.push(['Phrase', r, v, '', 'Starter list', now]); }); });
+    rows.forEach(function (r) { append_(t, { Type: r[0], Role: r[1], Value: r[2], SaveContact: r[3], CreatedBy: r[4], CreatedAt: r[5] }); });
+  }
+  return t;
+}
+function picks_() {
+  var t = pickTab_(), out = { roles: [], topics: {}, phrases: {} };
+  t.rows.forEach(function (r) {
+    var type = get_(t, r, 'Type'), role = get_(t, r, 'Role'), v = get_(t, r, 'Value');
+    if (!v) return;
+    if (type === 'Role') out.roles.push({ name: v, saveContact: truthy_(r[t.col.SaveContact]) });
+    else if (type === 'Topic') (out.topics[role] = out.topics[role] || []).push(v);
+    else if (type === 'Phrase') (out.phrases[role] = out.phrases[role] || []).push(v);
+  });
+  return out;
+}
+/** Anyone in the team can add a role, topic or phrase. Duplicates (ignoring case) are skipped. */
+function addPick_(p, me) {
+  var type = { role: 'Role', topic: 'Topic', phrase: 'Phrase' }[String(p.type || '').toLowerCase()];
+  var v = String(p.value || '').trim().slice(0, 80), role = type === 'Role' ? '' : String(p.role || '*').trim().slice(0, 80);
+  if (!type || !v) throw new Error('Nothing to add');
+  var t = pickTab_();
+  var dup = t.rows.some(function (r) { return get_(t, r, 'Type') === type && low_(get_(t, r, 'Role')) === low_(role) && low_(get_(t, r, 'Value')) === low_(v); });
+  if (!dup) append_(t, { Type: type, Role: role, Value: v, SaveContact: type === 'Role' ? !!p.saveContact : '', CreatedBy: me ? me.name : '', CreatedAt: new Date() });
+  return picks_();
+}
+
+// ---------- files ----------
+function folder_() {
+  var props = PropertiesService.getScriptProperties(), id = props.getProperty('filesFolder'), f = null;
+  if (id) { try { f = DriveApp.getFolderById(id); } catch (e) { f = null; } }
+  if (!f) {
+    f = DriveApp.createFolder(FILES_FOLDER);
+    props.setProperty('filesFolder', f.getId());
+    shareFolder_(f);
+  }
+  return f;
+}
+function shareFolder_(f) {
+  if (FILE_SHARING === 'link') f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  if (FILE_SHARING === 'team') {
+    var u = src_('User');
+    u.rows.forEach(function (r) {
+      var e = low_(r[u.col.Email]);
+      if (e && truthy_(r[u.col.IsActive])) { try { f.addEditor(e); } catch (err) {} }
+    });
+  }
+}
+/** Run from the Apps Script editor after adding people to the User tab, to give them access to the files folder. */
+function shareFilesFolderAgain() { shareFolder_(folder_()); }
+
+/** The original file name, unless it's a camera or app default like IMG_2031 or WhatsApp Image 2026-11-22. */
+function stem_(name) {
+  var s = String(name || '').replace(/\.[^.]+$/, '');
+  return /^(img|dsc|pxl|vid|screenshot|scan|image|photo|whatsapp (image|video|document)|document|doc|file|untitled)[\s_\-]*[\d\s_\-.:at]*(\(\d+\))?$/i.test(s) || /^[\d\s_\-.()]+$/.test(s) ? '' : s;
+}
+/** "2026-11-27_Your-child_Piano-Lesson_Pay-fees_Exam-form_Client.pdf": date, who it's for, topic, task, file, client. */
+function fileName_(f, ext) {
+  var clean = function (s, n) {
+    return String(s || '').replace(/^(re|fw|fwd):\s*/i, '').replace(/[\\\/:*?"<>|#%{}~&]+/g, ' ').replace(/\s+/g, ' ').trim()
+      .slice(0, n).trim().replace(/ /g, '-');
+  };
+  var title = String(f.title || String(f.name || '').replace(/\.[^.]+$/, ''));
+  if (f.topic && title.toLowerCase().indexOf(String(f.topic).toLowerCase() + ':') === 0) title = title.slice(String(f.topic).length + 1);
+  var parts = [String(f.date || '').slice(0, 10) || fmt_(new Date(), 'yyyy-MM-dd'), clean(f.role, 20), clean(f.topic, 30),
+    clean(title, 40), clean(stem_(f.name), 25), clean(f.client, 30)];
+  var seen = {};
+  parts = parts.filter(function (p) { var k = p.toLowerCase(); if (!p || seen[k]) return false; seen[k] = 1; return true; });
+  return parts.join('_') + (ext ? '.' + ext : '');
+}
+function upload_(f, me) {
+  if (!f.data) throw new Error('No file');
+  var t = tab_('File');
+  if (f.ref) for (var i = t.rows.length - 1; i >= 0; i--) if (String(t.rows[i][t.col.Ref]) === String(f.ref)) return fileObj_(t, t.rows[i]);
+  var bytes = Utilities.base64Decode(String(f.data).replace(/^data:[^,]*,/, ''));
+  if (bytes.length > MAX_FILE_MB * 1048576) throw new Error('File is over ' + MAX_FILE_MB + ' MB');
+  var ext = (String(f.name || '').match(/\.([A-Za-z0-9]{1,6})$/) || [])[1] || '';
+  // The task may have just been saved in the same sync: find it by the reference the app gave it.
+  var taskId = f.taskId || '';
+  if (!taskId && f.taskRef) {
+    var a = tab_('Activity'), tag = '[ref:' + f.taskRef + ']';
+    for (var j = a.rows.length - 1; j >= 0 && !taskId; j--) {
+      var d = String(a.rows[j][a.col.Description]);
+      if (d.indexOf(tag) >= 0) { var m = d.match(/\[task:([^\]]+)\]/); if (m) taskId = m[1]; }
+    }
+  }
+  var contactId = f.contactId || '', client = f.client || '';
+  if (taskId && !contactId) {
+    var tk = tab_('Task');
+    tk.rows.forEach(function (r) { if (String(r[tk.col.TaskID]) === taskId) contactId = String(r[tk.col.ContactID] || ''); });
+  }
+  if (contactId && !client) {
+    var c = tab_('Contact');
+    c.rows.forEach(function (r) { if (String(r[c.col.ContactID]) === contactId) client = String(r[c.col.CompanyName] || r[c.col.PIC] || ''); });
+  }
+  var folder = folder_(), base = fileName_({ date: f.date, role: f.role, topic: f.topic, title: f.title, name: f.name, client: client }, ''), name = base + (ext ? '.' + ext : '');
+  for (var n = 2; folder.getFilesByName(name).hasNext(); n++) name = base + '-' + n + (ext ? '.' + ext : '');
+  var blob = Utilities.newBlob(bytes, f.mime || 'application/octet-stream', name);
+  var file = folder.createFile(blob);
+  file.setDescription('Uploaded from Task Scheduler' + (taskId ? ' for task ' + taskId : '') + (client ? ' · ' + client : '') + (f.name ? ' · original name: ' + f.name : ''));
+  var row = append_(t, { FileID: 'F-' + hex_(10), FileName: name, OriginalName: String(f.name || ''), DriveFileID: file.getId(), Url: file.getUrl(),
+    MimeType: f.mime || '', SizeKB: Math.round(bytes.length / 1024), TaskID: taskId, ContactID: contactId, Role: f.role || '', Topic: f.topic || '',
+    UploadedBy: me ? me.name : '', UploadedAt: new Date(), Ref: f.ref || '' });
+  return fileObj_(t, row);
+}
+function fileObj_(t, r) {
+  return { id: get_(t, r, 'FileID'), name: get_(t, r, 'FileName'), original: get_(t, r, 'OriginalName'), url: get_(t, r, 'Url'),
+    mime: get_(t, r, 'MimeType'), sizeKB: get_(t, r, 'SizeKB'), taskId: get_(t, r, 'TaskID'), contactId: get_(t, r, 'ContactID'),
+    role: get_(t, r, 'Role'), topic: get_(t, r, 'Topic'), by: get_(t, r, 'UploadedBy'), at: get_(t, r, 'UploadedAt') };
+}
+function files_() {
+  var t = tab_('File');
+  return t.rows.filter(function (r) { return r[t.col.FileID]; }).map(function (r) { return fileObj_(t, r); }).slice(-500);
 }
