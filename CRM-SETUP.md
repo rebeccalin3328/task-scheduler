@@ -50,6 +50,14 @@ The tabs appear the first time a phone syncs. To fill them straight away, reload
 
 Team members only see, and can only add to, the calendars shared with them.
 
+### Phone reminders
+App calendars live only in the CRM sheet, so your phone can't remind you about them. Google Calendars can:
+1. **⚙︎ Manage calendars (admin)** → tap the calendar (for example Rebecca) → tick **🔔 Turn into a Google Calendar** → **Save calendar**. A Google Calendar with the same name is made in your account and its events are copied over.
+2. On your phone, open the **Google Calendar** app signed in as admin@airnergy.my, and make sure that calendar is ticked in the ☰ menu.
+3. From then on every event gets a pop-up reminder: **30 minutes before**, or **8 pm the evening before** for all-day tasks. You can change `REMINDER_MINUTES` and `ALL_DAY_REMINDER_MINUTES` at the top of the script.
+
+Someone else who wants reminders from a shared Google Calendar adds it in their own Google Calendar app, and sets its notifications under Settings → that calendar.
+
 ```
             Team        Service      Sales (Google)
  Rebecca     ✓            ✓              ✓        (admin sees all)
@@ -81,4 +89,4 @@ Each person picks a style in ⚙︎ → **Look and feel**: Classic, Rainbow (kid
 - **No signal?** Saves wait on the phone and upload later.
 
 ## Changing the script later
-Use **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**, so the link stays the same.
+Paste the new `crm-script.gs` over the old one, **put your two secret words back** in `TEAM_KEY` and `ADMIN_KEY`, click 💾 Save, then use **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**, so the link stays the same.

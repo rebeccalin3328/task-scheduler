@@ -237,7 +237,9 @@
     $('admActive').checked = c.active !== false;
     $('admType').textContent = c.type === 'Google'
       ? (c.googleId ? 'Linked Google Calendar. Events added here go straight into it, and phone reminders work as usual.' : 'A new Google Calendar will be created in your Google account.')
-      : 'App calendar: events are kept in the CRM sheet.';
+      : 'App calendar: events are kept in the CRM sheet, so your phone can\'t remind you.';
+    $('admToGoogleRow').classList.toggle('hidden', !(c.id && c.type !== 'Google'));
+    $('admToGoogle').checked = false;
     $('admNote').textContent = '';
     $('admEdit').scrollIntoView({ behavior: 'smooth' });
     $('admName').focus();
@@ -254,7 +256,8 @@
     var c = admEditing;
     var people = Array.prototype.filter.call($('admPeople').querySelectorAll('input'), function (x) { return x.checked; }).map(function (x) { return x.value; });
     var body = { id: c.id, type: c.type, googleId: c.googleId, name: $('admName').value.trim() || 'Calendar', color: admColor,
-      sharedWith: $('admEveryone').checked ? 'Everyone' : people.join(', '), active: $('admActive').checked };
+      sharedWith: $('admEveryone').checked ? 'Everyone' : people.join(', '), active: $('admActive').checked,
+      toGoogle: !!(c.id && c.type !== 'Google' && $('admToGoogle').checked) };
     $('admNote').textContent = 'Saving…'; $('admSave').disabled = true;
     C.api({ action: 'saveCalendar', calendar: body }).then(function () {
       $('admSave').disabled = false; $('admNote').textContent = 'Saved.'; $('admEdit').classList.add('hidden');
