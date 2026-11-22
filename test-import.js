@@ -14,4 +14,13 @@ assert.strictEqual(JSON.stringify(it[0].client), '{"none":true}', 'no client: sa
 assert.strictEqual(it[1].client.phone, '60120000000');
 assert.strictEqual(it[1].task.ref, 'wa2', 'ref is kept so a second tap does not add duplicates');
 assert.strictEqual(it[1].task.due, '2030-01-02 10:00');
+assert.strictEqual(it[0].task.calendarId, undefined, 'no calendar chosen: task list only');
+const onCal = win.IMPORT.items(back.tasks, i => i === 0 ? 'cal-team' : 'cal-x');
+assert.strictEqual(onCal[0].task.calendarId, 'cal-team');
+assert.strictEqual(onCal[0].task.allDay, true, 'date only: all-day entry');
+assert.strictEqual(onCal[0].task.start, '2030-01-02');
+assert.strictEqual(onCal[1].task.calendarId, 'cal-x', 'each task can have its own calendar');
+assert.strictEqual(onCal[1].task.start, '2030-01-02T10:00');
+assert.strictEqual(onCal[1].task.allDay, false);
+assert.strictEqual(JSON.stringify(win.IMPORT.slot('', 'cal-team')), '{}', 'no date: no calendar entry');
 console.log('import tests passed');

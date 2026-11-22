@@ -195,6 +195,15 @@ as('ahmad@example.my', { action: 'addEvent', event: { calendarId: service.id, ti
 let g = as('siti@example.my', { action: 'addEvent', event: { calendarId: sales.id, title: 'Meet ABC', start: '2026-11-25', end: '2026-11-25', allDay: true } });
 assert.ok(g.ok, g.error); assert.equal(G3.gcals['sales@group.calendar.google.com'].evs.length, 1, 'written to Google Calendar');
 
+// Imported task: first saved without a calendar, then the same link opened again with one. One task, one event.
+const nTasks = () => G3.sheets.Task.rows.length, nEvents = () => G3.sheets.Event.rows.length;
+as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 'Piano exam form', due: '2026-12-01', ref: 'imp1' } });
+const t0 = nTasks(), e0 = nEvents();
+as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 'Piano exam form', due: '2026-12-01', ref: 'imp1', calendarId: service.id, start: '2026-12-01', end: '2026-12-01', allDay: true } });
+as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 'Piano exam form', due: '2026-12-01', ref: 'imp1', calendarId: service.id, start: '2026-12-01', end: '2026-12-01', allDay: true } });
+assert.equal(nTasks(), t0, 'reopening the import link does not add the task again');
+assert.equal(nEvents(), e0 + 1, 'but puts it on the chosen calendar once');
+
 const week = email => as(email, { action: 'events', from: '2026-11-23', to: '2026-11-30' }).events.map(e => e.title + '@' + e.start).sort();
 assert.deepEqual(week('ahmad@example.my'), ['Aircond service@2026-11-24T10:00']);
 assert.deepEqual(week('siti@example.my'), ['Meet ABC@2026-11-25T00:00']);
