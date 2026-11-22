@@ -1,7 +1,7 @@
 // Add a batch of tasks from a link: index.html#import=<base64url JSON>.
 // The list is shown first, and nothing is saved until you tap Add. Saving uses the CRM link and team key already on
 // this phone, so the link itself carries no keys. The part after # never leaves the phone (browsers don't send it).
-// Payload: { tasks: [{ ref, title, due: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM', description, role, topic,
+// Payload: { tasks: [{ ref, title, due: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM', description, role, topic, priority,
 //                      client: { name, phone, company } or null }] }
 // You pick one calendar for the whole list, and can change it for any single task. Tasks with a date are also put on
 // that calendar. Opening the same link again only adds the calendar entries: tasks are never added twice (same ref).
@@ -33,7 +33,7 @@
     return tasks.map(function (t, i) {
       var c = t.client && (t.client.phone || t.client.name || t.client.company) ? t.client : { none: true };
       return { action: 'save', client: c, task: Object.assign({ title: t.title, due: t.due || '', description: t.description || '', ref: t.ref,
-        role: t.role || '', topic: t.topic || '' }, slot(t.due, calFor ? calFor(i) : '')) };
+        role: t.role || '', topic: t.topic || '', priority: t.priority || '' }, slot(t.due, calFor ? calFor(i) : '')) };
     });
   }
   function calendars() {

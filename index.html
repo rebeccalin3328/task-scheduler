@@ -101,6 +101,11 @@
   .task .tt.link { cursor: pointer; }
   #dueList .task { padding: 10px 12px; }
   #dueList .empty { padding: 10px 12px; }
+  .task .ctl { display: flex; flex-direction: column; gap: 4px; flex: none; }
+  .task select.pr { width: auto; margin: 0; padding: 4px 6px; font-size: 13px; border-radius: 8px; max-width: 112px; }
+  .task select.pr[data-p="Urgent"] { background: #ffebee; color: #b71c1c; font-weight: 600; }
+  .task select.pr[data-p="High"] { background: #fff3e0; color: #8a4b00; }
+  .task select.pr[data-p="Low"] { color: var(--muted); }
   .task select.st { width: auto; margin: 0; padding: 4px 6px; font-size: 13px; border-radius: 8px; flex: none; max-width: 112px; }
   .task select.st[data-s="In progress"] { background: #e3f2fd; color: #0d47a1; }
   .task select.st[data-s="Waiting"] { background: #fff3e0; color: #8a4b00; }
