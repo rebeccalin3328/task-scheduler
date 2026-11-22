@@ -1,18 +1,22 @@
 /**
- * Task Scheduler CRM backend for the "airnergy_crm_backend" master sheet.
+ * Task Scheduler CRM backend.
  *
- * It only reads and writes these tabs: Contact, ContactPerson, Task, Activity.
- * It reads the User tab only to turn a team member's work email into their UserID, and never sends User data out.
- * It adds rows. It never deletes rows, adds tabs or columns, or changes AutoCount fields on AutoCount contacts.
- * Safety net: every contact it creates is also written to the Activity tab. If a sync (for example from AutoCount)
- * removes one of those contacts, the next time the app syncs it is put back with the same ContactID.
+ * Two sheets:
+ * - airnergy_crm_backend (SOURCE_ID) is READ ONLY. Contacts and contact persons are copied from it, and its User tab
+ *   is read to turn a team member's work email into their UserID. Nothing is ever written to it.
+ * - The CRM sheet this script is attached to holds everything the app writes: Contact, ContactPerson, Task and
+ *   Activity tabs (same column names as the master, created automatically).
  *
- * Setup: see CRM-SETUP.md. In short: script.google.com > New project, paste this file,
- * set TEAM_KEY, then Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).
+ * Copying: contacts are copied from the master the first time and then at most once an hour, when the app syncs.
+ * AutoCount details are refreshed from the master; CRM fields (AssignedAgent, CRMTags, CRMNotes) and contacts added
+ * from WhatsApp are kept. Nothing is deleted. You can also copy now from the sheet menu: Task Scheduler > Copy contacts now.
+ *
+ * Setup: see CRM-SETUP.md. In short: in the CRM sheet, Extensions > Apps Script, paste this file, set TEAM_KEY,
+ * then Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).
  */
 var TEAM_KEY = 'change-me';
-// The airnergy_crm_backend sheet. This script runs as its own project, so it can't clash with other scripts on the sheet.
-var SHEET_ID = '1zwAriAqdWsEjeR5TzSpMYy5B2R5v_kTGFG0adR3t6y4';
+var SOURCE_ID = '1zwAriAqdWsEjeR5TzSpMYy5B2R5v_kTGFG0adR3t6y4'; // airnergy_crm_backend (read only)
+var COPY_EVERY_MINUTES = 60;
 
 var NEW_SOURCE = 'WhatsApp';     // Contact.Source for people added from the app
 var OPEN_STATUS = 'New';         // Task.Status for new tasks
@@ -34,7 +38,7 @@ function handle_(req) {
     lock.waitLock(20000);
     try {
       var me = user_(req.me);
-      if (req.action === 'list') restoreMissing_();
+      copyContacts_(false); // first run, then at most hourly
       if (req.action === 'list') return { ok: true, me: me ? me.name : '', team: team_(), clients: clients_(), tasks: tasks_() };
       if (req.action === 'save') return save_(req.client || {}, req.task, me);
       if (req.action === 'done') return done_(req.taskId, me);
@@ -46,9 +50,31 @@ function handle_(req) {
 }
 
 // ---------- sheet helpers ----------
+var HEADERS = {
+  Task: ['TaskID', 'Title', 'Description', 'ContactID', 'LeadID', 'ServiceJobID', 'AssignedTo', 'CreatedBy', 'DueDate', 'Priority', 'Status', 'BlockedReason', 'CompletedAt', 'CreatedAt'],
+  Activity: ['ActivityID', 'Timestamp', 'UserID', 'ActionType', 'ContactID', 'LeadID', 'TaskID', 'ServiceJobID', 'Description', 'Attachment']
+};
+function crm_() { return SpreadsheetApp.getActiveSpreadsheet(); }
+/** A tab of the CRM sheet, created with the master's column names if it doesn't exist yet. */
 function tab_(name) {
-  var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(name);
-  if (!sh) throw new Error('Tab "' + name + '" not found');
+  var ss = crm_(), sh = ss.getSheetByName(name);
+  if (!sh) {
+    var head = HEADERS[name] || src_(name).head;
+    sh = ss.insertSheet(name);
+    sh.appendRow(head);
+    sh.setFrozenRows(1);
+  }
+  return read_(sh);
+}
+/** A tab of airnergy_crm_backend. Read only: nothing in this script writes to it. */
+function src_(name) {
+  var sh = SpreadsheetApp.openById(SOURCE_ID).getSheetByName(name);
+  if (!sh) throw new Error('Tab "' + name + '" not found in airnergy_crm_backend');
+  var t = read_(sh);
+  t.sh = null; // no write access by accident
+  return t;
+}
+function read_(sh) {
   var v = sh.getDataRange().getValues();
   var head = v.shift().map(String), col = {};
   head.forEach(function (h, i) { col[h] = i; });
@@ -85,19 +111,19 @@ function emails_(s) { return String(s || '').split(/[;,\s]+/).map(low_).filter(f
 function user_(email) {
   email = low_(email);
   if (!email) return null;
-  var t = tab_('User');
+  var t = src_('User');
   for (var i = 0; i < t.rows.length; i++) {
     if (low_(t.rows[i][t.col.Email]) === email) return { id: get_(t, t.rows[i], 'UserID'), name: get_(t, t.rows[i], 'FullName') };
   }
   return null;
 }
 function team_() {
-  var t = tab_('User'), names = {};
+  var t = src_('User'), names = {};
   t.rows.forEach(function (r) { if (truthy_(r[t.col.IsActive]) && r[t.col.FullName]) names[get_(t, r, 'FullName')] = 1; });
   return Object.keys(names).sort();
 }
 function userNames_() {
-  var t = tab_('User'), m = {};
+  var t = src_('User'), m = {};
   t.rows.forEach(function (r) { m[get_(t, r, 'UserID')] = get_(t, r, 'FullName'); });
   return m;
 }
@@ -170,7 +196,6 @@ function save_(q, task, me) {
       Phone: q.phone || '', PrimaryEmail: q.email || '', IsActive: true, AssignedAgent: q.owner || (me ? me.name : ''),
       CRMTags: withStatus_('', q.status || 'Lead'), CRMNotes: q.notes || '' });
     created = true;
-    backup_(c, c.rows.length - 1, me, 'Contact created');
   } else {
     var r = hit.row, row = c.rows[r];
     id = String(row[c.col.ContactID]);
@@ -186,7 +211,6 @@ function save_(q, task, me) {
     else if (!row[c.col.AssignedAgent] && me) setCell_(c, r, 'AssignedAgent', me.name);
     if (q.notes !== undefined && (q.notes !== '' || q.edit)) setCell_(c, r, 'CRMNotes', q.notes);
     if (q.active !== undefined && q.edit) setCell_(c, r, 'IsActive', !!q.active);
-    if (own && q.edit) backup_(c, r, me, 'Contact updated');
     // A new person for a known company (matched by email or company name): add them as a contact person.
     if (!q.edit && (hit.how === 'company' || hit.how === 'email') && q.name && q.phone) {
       var ph = phones_(q.phone)[0], known = phones_(row[c.col.Phone]).indexOf(ph) >= 0 ||
@@ -234,30 +258,43 @@ function done_(taskId, me) {
   throw new Error('Task not found');
 }
 
-// ---------- safety net for contacts made in the app ----------
-var BACKUP_FIELDS = ['ContactID', 'Source', 'CompanyName', 'PIC', 'Phone', 'PrimaryEmail', 'IsActive', 'AssignedAgent', 'CRMTags', 'CRMNotes'];
-function backup_(c, r, me, type) {
-  var o = {};
-  BACKUP_FIELDS.forEach(function (h) { if (c.col[h] !== undefined) o[h] = c.rows[r][c.col[h]]; });
-  append_(tab_('Activity'), { ActivityID: 'A-' + hex_(12), Timestamp: new Date(), UserID: me ? me.id : '', ActionType: type,
-    ContactID: o.ContactID, Description: 'Task Scheduler backup ' + JSON.stringify(o) });
+// ---------- copying contacts from airnergy_crm_backend ----------
+var CRM_FIELDS = ['AssignedAgent', 'CRMTags', 'CRMNotes']; // edited in the CRM sheet, so never overwritten
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Task Scheduler').addItem('Copy contacts now', 'copyContactsNow').addToUi();
 }
-/** Put back any contact this app created that has since disappeared from the Contact tab. */
-function restoreMissing_() {
-  var a = tab_('Activity'), c = tab_('Contact'), latest = {}, have = {};
-  a.rows.forEach(function (r) {
-    var d = String(r[a.col.Description]), i = d.indexOf('Task Scheduler backup ');
-    if (i !== 0) return;
-    try { var o = JSON.parse(d.slice(22)); if (o.ContactID) latest[o.ContactID] = o; } catch (e) {}
+function copyContactsNow() { copyContacts_(true); }
+
+function copyContacts_(force) {
+  var props = PropertiesService.getScriptProperties();
+  var last = +props.getProperty('lastCopy') || 0;
+  if (!force && Date.now() - last < COPY_EVERY_MINUTES * 60000) return false;
+  mergeTab_('Contact', 'ContactID', CRM_FIELDS);
+  mergeTab_('ContactPerson', 'PersonID', []);
+  props.setProperty('lastCopy', String(Date.now()));
+  return true;
+}
+
+/** Add new rows from the master and refresh existing ones, keeping keepFields when the CRM sheet has a value. */
+function mergeTab_(name, idCol, keepFields) {
+  var s = src_(name), t = tab_(name), at = {};
+  // Columns the master has that the CRM tab doesn't yet: add them at the end.
+  s.head.forEach(function (h) {
+    if (t.col[h] === undefined) { t.col[h] = t.head.length; t.head.push(h); t.rows.forEach(function (r) { r.push(''); }); }
   });
-  c.rows.forEach(function (r) { have[String(r[c.col.ContactID])] = 1; });
-  var n = 0;
-  Object.keys(latest).forEach(function (id) {
-    if (have[id]) return;
-    append_(c, latest[id]);
-    n++;
+  t.rows.forEach(function (r, i) { if (r[t.col[idCol]]) at[String(r[t.col[idCol]])] = i; });
+  s.rows.forEach(function (r) {
+    var id = String(r[s.col[idCol]] || '');
+    if (!id) return;
+    var i = at[id], row;
+    if (i === undefined) { row = t.head.map(function () { return ''; }); t.rows.push(row); at[id] = t.rows.length - 1; }
+    else row = t.rows[i];
+    s.head.forEach(function (h, j) {
+      if (keepFields.indexOf(h) >= 0 && row[t.col[h]] !== '' && row[t.col[h]] != null) return;
+      row[t.col[h]] = r[j];
+    });
   });
-  if (n) append_(a, { ActivityID: 'A-' + hex_(12), Timestamp: new Date(), ActionType: 'Contacts restored',
-    Description: 'Task Scheduler put back ' + n + ' WhatsApp contact(s) missing from the Contact tab' });
-  return n;
+  t.sh.getRange(1, 1, 1, t.head.length).setValues([t.head]);
+  if (t.rows.length) t.sh.getRange(2, 1, t.rows.length, t.head.length).setValues(t.rows);
 }

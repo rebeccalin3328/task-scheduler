@@ -1,18 +1,27 @@
 // CRM backend tests: node test-crm.js
-// Runs crm-script.gs against a fake copy of the airnergy_crm_backend tabs (made-up data, real column names).
+// Runs crm-script.gs against a fake airnergy_crm_backend (made-up data, real column names) and a fake, empty CRM sheet.
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 
 function fakeSheet(tabs) {
-  const sheets = {};
-  Object.keys(tabs).forEach(n => { sheets[n] = { rows: tabs[n].map(r => r.slice()) }; });
+  const source = {}, sheets = {};
+  Object.keys(tabs).forEach(n => { source[n] = { rows: tabs[n].map(r => r.slice()) }; });
   const api = sh => ({
     getDataRange: () => ({ getValues: () => sh.rows.map(r => r.slice()) }),
     appendRow: r => { sh.rows.push(r.slice()); },
-    getRange: (row, col) => ({ setValue: v => { sh.rows[row - 1][col - 1] = v; } })
+    setFrozenRows() {},
+    getRange: (row, col, nr, nc) => ({
+      setValue: v => { sh.rows[row - 1][col - 1] = v; },
+      setValues: vals => { vals.forEach((r, i) => { sh.rows[row - 1 + i] = sh.rows[row - 1 + i] || []; r.forEach((v, j) => { sh.rows[row - 1 + i][col - 1 + j] = v; }); }); }
+    })
   });
+  const props = {};
   let n = 0;
   const ctx = {
-    SpreadsheetApp: { openById: () => ({ getSheetByName: nm => sheets[nm] && api(sheets[nm]) }) },
+    SpreadsheetApp: {
+      openById: () => ({ getSheetByName: nm => source[nm] && api(source[nm]) }),
+      getActiveSpreadsheet: () => ({ getSheetByName: nm => sheets[nm] && api(sheets[nm]), insertSheet: nm => api(sheets[nm] = { rows: [] }) })
+    },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
     Utilities: {
@@ -25,7 +34,7 @@ function fakeSheet(tabs) {
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/crm-script.gs', 'utf8'), ctx);
-  return { sheets, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
+  return { sheets, source, props, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
 }
 
 const tabs = {
@@ -40,6 +49,7 @@ const tabs = {
   Activity: [['ActivityID', 'Timestamp', 'UserID', 'ActionType', 'ContactID', 'LeadID', 'TaskID', 'ServiceJobID', 'Description', 'Attachment']]
 };
 
+const masterBefore = JSON.stringify(tabs);
 const G = fakeSheet(tabs), key = 'change-me', me = 'Rebecca@example.my';
 const call = b => G.call(Object.assign({ key, me }, b));
 const rows = n => G.sheets[n].rows;
@@ -74,7 +84,6 @@ r = call({ action: 'save', client: { name: 'Ali', phone: '013-999 8888', status:
 assert.ok(r.created); const newId = r.id;
 let row = rows('Contact').find(x => x[0] === newId);
 assert.equal(row[1], 'WhatsApp'); assert.equal(row[3], 'Ali'); assert.equal(row[13], 'Prospect');
-assert.ok(rows('Activity').some(a => a[3] === 'Contact created' && a[4] === newId));
 
 // Status change keeps other tags; AutoCount details can't be edited from the app
 call({ action: 'save', client: { id: 'c-aaaaaaaaaaaa', status: 'Customer', notes: 'Wants bulk discount', company: 'HACKED', edit: true } });
@@ -93,11 +102,22 @@ const json = JSON.stringify(l);
 assert.ok(call({ action: 'done', taskId: l.tasks[0].id }).ok);
 assert.equal(rows('Task')[1][10], 'Done');
 
-// Safety net: a sync deletes the WhatsApp contact; the next list puts it back with the same ID
-G.sheets.Contact.rows = G.sheets.Contact.rows.filter(x => x[0] !== newId);
-const l2 = call({ action: 'list' });
-assert.ok(l2.clients.some(c => c.id === newId && c.name === 'Ali' && c.status === 'Prospect'), 'contact restored');
+// The master sheet was never written to
+assert.equal(JSON.stringify(Object.fromEntries(Object.entries(G.source).map(([k, v]) => [k, v.rows]))), masterBefore, 'airnergy_crm_backend unchanged');
+assert.deepEqual(Object.keys(G.sheets).sort(), ['Activity', 'Contact', 'ContactPerson', 'Task'], 'CRM sheet has only the CRM tabs (no User copy)');
+
+// Hourly copy: master changes flow in, CRM notes and WhatsApp contacts are kept
+G.source.Contact.rows[1][5] = '+6012-0000000';           // AutoCount phone changed
+G.source.Contact.rows[1][14] = 'note typed in AppSheet'; // master note: CRM note already set, so kept
+G.source.Contact.rows.push(['c-cccccccccccc', 'AutoCount Debtor', '300-0003', 'GAMMA', '', '', '', '', '', '', true, '', '', '', '', '']);
 call({ action: 'list' });
-assert.equal(rows('Contact').filter(x => x[0] === newId).length, 1, 'restored once only');
+assert.equal(rows('Contact').length, 4, 'not copied again within the hour');
+G.props.lastCopy = '0';
+const l3 = call({ action: 'list' });
+const alpha = l3.clients.find(c => c.id === 'c-aaaaaaaaaaaa');
+assert.equal(alpha.phone, '+6012-0000000'); assert.equal(alpha.notes, 'Wants bulk discount'); assert.equal(alpha.status, 'Customer');
+assert.ok(l3.clients.some(c => c.id === 'c-cccccccccccc'), 'new master contact copied');
+assert.ok(l3.clients.some(c => c.id === newId), 'WhatsApp contact kept');
+assert.equal(l3.clients.length, 4);
 
 console.log('CRM sheet script: all checks passed');
