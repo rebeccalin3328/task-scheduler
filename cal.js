@@ -267,4 +267,10 @@
 
   window.CAL = { editing: function () { return editing; }, changed: function () { loadedKey = ''; if (!$('calView').classList.contains('hidden')) fetchEvents(true); else chips(); } };
   render();
+
+  // Home-screen shortcuts open a view straight away: index.html?view=calendar | tasks
+  var startView = new URLSearchParams(location.search).get('view');
+  if (startView === 'calendar') $('tabCal').click();
+  else if (startView === 'tasks') $('tabClients').click();
+  if (startView) history.replaceState(null, '', location.pathname);
 })();
