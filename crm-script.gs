@@ -11,10 +11,15 @@
  * AutoCount details are refreshed from the master; CRM fields (AssignedAgent, CRMTags, CRMNotes) and contacts added
  * from WhatsApp are kept. Nothing is deleted. You can also copy now from the sheet menu: Task Scheduler > Copy contacts now.
  *
+ * Calendars: the Calendar tab lists app calendars (events kept in the Event tab) and linked Google Calendars
+ * (events read and written in Google Calendar). Each is shared with Everyone or with chosen work emails.
+ * Only someone with ADMIN_KEY can create, link or share calendars.
+ *
  * Setup: see CRM-SETUP.md. In short: in the CRM sheet, Extensions > Apps Script, paste this file, set TEAM_KEY,
  * then Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).
  */
 var TEAM_KEY = 'change-me';
+var ADMIN_KEY = 'change-me-too'; // only Rebecca: lets the app create, link and share calendars
 var SOURCE_ID = '1zwAriAqdWsEjeR5TzSpMYy5B2R5v_kTGFG0adR3t6y4'; // airnergy_crm_backend (read only)
 var COPY_EVERY_MINUTES = 60;
 
@@ -39,9 +44,18 @@ function handle_(req) {
     try {
       var me = user_(req.me);
       copyContacts_(false); // first run, then at most hourly
-      if (req.action === 'list') return { ok: true, me: me ? me.name : '', team: team_(), clients: clients_(), tasks: tasks_() };
-      if (req.action === 'save') return save_(req.client || {}, req.task, me);
+      var admin = !!req.adminKey && String(req.adminKey) === ADMIN_KEY && ADMIN_KEY !== 'change-me-too';
+      var who = { me: me, email: low_(req.me), admin: admin };
+      if (req.action === 'list') return { ok: true, me: me ? me.name : '', team: team_(), clients: clients_(), tasks: tasks_(),
+        calendars: calendars_(who), isAdmin: admin };
+      if (req.action === 'save') return save_(req.client || {}, req.task, me, who);
       if (req.action === 'done') return done_(req.taskId, me);
+      if (req.action === 'events') return { ok: true, events: events_(who, req.from, req.to) };
+      if (req.action === 'addEvent') return { ok: true, event: addEvent_(who, req.event || {}, '', '') };
+      if (req.action === 'updateEvent') return { ok: true, event: updateEvent_(who, req.event || {}) };
+      if (req.action === 'deleteEvent') return deleteEvent_(who, req.event || {});
+      if (req.action === 'adminInfo') return adminInfo_(who);
+      if (req.action === 'saveCalendar') return { ok: true, calendar: saveCalendar_(who, req.calendar || {}) };
       throw new Error('Unknown action');
     } finally { lock.releaseLock(); }
   } catch (err) {
@@ -52,6 +66,8 @@ function handle_(req) {
 // ---------- sheet helpers ----------
 var HEADERS = {
   Task: ['TaskID', 'Title', 'Description', 'ContactID', 'LeadID', 'ServiceJobID', 'AssignedTo', 'CreatedBy', 'DueDate', 'Priority', 'Status', 'BlockedReason', 'CompletedAt', 'CreatedAt'],
+  Calendar: ['CalendarID', 'Name', 'Color', 'Type', 'GoogleCalendarID', 'SharedWith', 'IsActive', 'CreatedAt'],
+  Event: ['EventID', 'CalendarID', 'Title', 'Description', 'Start', 'End', 'AllDay', 'Location', 'ContactID', 'TaskID', 'CreatedBy', 'CreatedAt', 'GoogleEventID', 'Ref'],
   Activity: ['ActivityID', 'Timestamp', 'UserID', 'ActionType', 'ContactID', 'LeadID', 'TaskID', 'ServiceJobID', 'Description', 'Attachment']
 };
 function crm_() { return SpreadsheetApp.getActiveSpreadsheet(); }
@@ -113,7 +129,7 @@ function user_(email) {
   if (!email) return null;
   var t = src_('User');
   for (var i = 0; i < t.rows.length; i++) {
-    if (low_(t.rows[i][t.col.Email]) === email) return { id: get_(t, t.rows[i], 'UserID'), name: get_(t, t.rows[i], 'FullName') };
+    if (low_(t.rows[i][t.col.Email]) === email) return { id: get_(t, t.rows[i], 'UserID'), name: get_(t, t.rows[i], 'FullName'), email: email };
   }
   return null;
 }
@@ -186,7 +202,7 @@ function byId_(c, id, how) {
   return null;
 }
 
-function save_(q, task, me) {
+function save_(q, task, me, who) {
   var c = tab_('Contact'), p = tab_('ContactPerson');
   var hit = find_(c, p, q), id, created = false;
   if (!hit) {
@@ -220,8 +236,14 @@ function save_(q, task, me) {
     }
   }
   var taskId = '';
-  if (task && task.title) taskId = addTask_(id, task, me);
-  return { ok: true, id: id, created: created, taskId: taskId };
+  var event = null;
+  if (task && task.title) {
+    taskId = addTask_(id, task, me);
+    if (task.calendarId && task.start) event = addEvent_(who || { me: me }, {
+      calendarId: task.calendarId, title: task.title, description: task.description, location: task.location,
+      start: task.start, end: task.end, allDay: task.allDay, ref: task.ref }, id, taskId);
+  }
+  return { ok: true, id: id, created: created, taskId: taskId, event: event };
 }
 
 function addTask_(contactId, task, me) {
@@ -297,4 +319,191 @@ function mergeTab_(name, idCol, keepFields) {
   });
   t.sh.getRange(1, 1, 1, t.head.length).setValues([t.head]);
   if (t.rows.length) t.sh.getRange(2, 1, t.rows.length, t.head.length).setValues(t.rows);
+}
+
+// ---------- calendars ----------
+var COLORS = ['#039be5', '#33b679', '#f4511e', '#8e24aa', '#f6bf26', '#e67c73', '#3f51b5', '#0b8043', '#616161'];
+
+function calTab_() {
+  var t = tab_('Calendar');
+  if (!t.rows.length) append_(t, { CalendarID: 'cal-team', Name: 'Team', Color: COLORS[0], Type: 'App', SharedWith: 'Everyone', IsActive: true, CreatedAt: new Date() });
+  return t;
+}
+function calObj_(t, r) {
+  return { id: get_(t, r, 'CalendarID'), name: get_(t, r, 'Name'), color: get_(t, r, 'Color') || COLORS[0], type: get_(t, r, 'Type') || 'App',
+    googleId: get_(t, r, 'GoogleCalendarID'), sharedWith: get_(t, r, 'SharedWith'), active: r[t.col.IsActive] === '' || truthy_(r[t.col.IsActive]) };
+}
+function canSee_(cal, who) {
+  if (who.admin) return true;
+  if (!cal.active) return false;
+  if (/^\s*everyone\s*$/i.test(cal.sharedWith)) return true;
+  return !!who.email && emails_(cal.sharedWith).indexOf(who.email) >= 0;
+}
+/** Calendars this person may see and add to. Google Calendar IDs are only shown to the admin. */
+function calendars_(who) {
+  return visible_(who).map(function (c) {
+    if (!who.admin) { delete c.googleId; delete c.sharedWith; }
+    return c;
+  });
+}
+function visible_(who) {
+  var t = calTab_();
+  return t.rows.filter(function (r) { return r[t.col.CalendarID]; }).map(function (r) { return calObj_(t, r); })
+    .filter(function (c) { return canSee_(c, who); });
+}
+function cal_(who, id) {
+  var t = calTab_();
+  for (var i = 0; i < t.rows.length; i++) if (String(t.rows[i][t.col.CalendarID]) === String(id)) {
+    var c = calObj_(t, t.rows[i]);
+    if (!canSee_(c, who) || !c.active) throw new Error('You don\'t have access to that calendar');
+    return c;
+  }
+  throw new Error('Calendar not found');
+}
+function gcal_(c) {
+  var g = CalendarApp.getCalendarById(c.googleId);
+  if (!g) throw new Error('Google Calendar "' + c.name + '" is not available to the CRM owner');
+  return g;
+}
+
+// Times travel as local 'yyyy-MM-ddTHH:mm' (or 'yyyy-MM-dd' for all-day) in the script's time zone.
+function parse_(s) {
+  var m = String(s || '').match(/^(\d{4})-(\d\d)-(\d\d)(?:[T ](\d\d):(\d\d))?/);
+  if (!m) throw new Error('Bad date: ' + s);
+  return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0));
+}
+function iso_(d) { return fmt_(d, 'yyyy-MM-dd') + 'T' + fmt_(d, 'HH:mm'); }
+
+function events_(who, from, to) {
+  var a = parse_(from), b = parse_(to), out = [];
+  var e = tab_('Event'), byGoogle = {};
+  var cals = visible_(who).filter(function (c) { return c.active; });
+  var ids = {};
+  cals.forEach(function (c) { ids[c.id] = c; });
+  e.rows.forEach(function (r) {
+    var cid = get_(e, r, 'CalendarID'), gid = get_(e, r, 'GoogleEventID');
+    if (gid) { byGoogle[gid] = { contactId: get_(e, r, 'ContactID'), taskId: get_(e, r, 'TaskID'), by: get_(e, r, 'CreatedBy') }; return; }
+    var c = ids[cid];
+    if (!c || c.type !== 'App') return;
+    var s = r[e.col.Start] instanceof Date ? r[e.col.Start] : parse_(r[e.col.Start]);
+    var en = r[e.col.End] instanceof Date ? r[e.col.End] : (r[e.col.End] ? parse_(r[e.col.End]) : s);
+    if (en < a || s >= b) return;
+    out.push({ id: get_(e, r, 'EventID'), calendarId: cid, title: get_(e, r, 'Title'), description: get_(e, r, 'Description'),
+      location: get_(e, r, 'Location'), start: iso_(s), end: iso_(en), allDay: truthy_(r[e.col.AllDay]),
+      contactId: get_(e, r, 'ContactID'), taskId: get_(e, r, 'TaskID'), by: get_(e, r, 'CreatedBy') });
+  });
+  cals.forEach(function (c) {
+    if (c.type !== 'Google' || !c.googleId) return;
+    var g;
+    try { g = gcal_(c); } catch (err) { return; }
+    g.getEvents(a, b).forEach(function (ev) {
+      var link = byGoogle[ev.getId()] || {}, allDay = ev.isAllDayEvent();
+      var en = ev.getEndTime();
+      if (allDay) en = new Date(en.getTime() - 60000); // Google's all-day end is the next midnight
+      out.push({ id: 'g:' + c.id + ':' + ev.getId(), calendarId: c.id, title: ev.getTitle(), description: ev.getDescription(),
+        location: ev.getLocation(), start: iso_(ev.getStartTime()), end: iso_(en), allDay: allDay,
+        contactId: link.contactId || '', taskId: link.taskId || '', by: link.by || '' });
+    });
+  });
+  return out.sort(function (x, y) { return x.start < y.start ? -1 : 1; });
+}
+
+function addEvent_(who, ev, contactId, taskId) {
+  var c = cal_(who, ev.calendarId), e = tab_('Event');
+  if (ev.ref) for (var i = e.rows.length - 1; i >= 0; i--) if (String(e.rows[i][e.col.Ref]) === String(ev.ref)) return { id: get_(e, e.rows[i], 'EventID'), dup: true };
+  var start = parse_(ev.start), end = ev.end ? parse_(ev.end) : new Date(start.getTime() + 3600000);
+  if (ev.allDay) { start = parse_(String(ev.start).slice(0, 10)); end = parse_(String(ev.end || ev.start).slice(0, 10)); }
+  if (end < start) end = start;
+  var title = String(ev.title || 'Event').slice(0, 200), gid = '';
+  if (c.type === 'Google') {
+    var g = gcal_(c), opt = { description: String(ev.description || ''), location: String(ev.location || '') };
+    var gev = ev.allDay ? g.createAllDayEvent(title, start, new Date(end.getTime() + 86400000), opt) : g.createEvent(title, start, end, opt);
+    gid = gev.getId();
+  }
+  var id = 'E-' + hex_(12), by = who.me ? who.me.name : (who.email || '');
+  append_(e, { EventID: id, CalendarID: c.id, Title: title, Description: String(ev.description || '').slice(0, 4000), Start: start, End: end,
+    AllDay: !!ev.allDay, Location: String(ev.location || ''), ContactID: contactId || ev.contactId || '', TaskID: taskId || '',
+    CreatedBy: by, CreatedAt: new Date(), GoogleEventID: gid, Ref: ev.ref || '' });
+  return { id: gid ? 'g:' + c.id + ':' + gid : id, calendarId: c.id, title: title, start: iso_(start), end: iso_(end), allDay: !!ev.allDay };
+}
+
+function findEvent_(who, id) {
+  var e = tab_('Event');
+  if (/^g:/.test(id)) {
+    var parts = id.split(':'), c = cal_(who, parts[1]), gid = parts.slice(2).join(':');
+    return { cal: c, gev: gcal_(c).getEventById(gid), gid: gid, e: e };
+  }
+  for (var i = 0; i < e.rows.length; i++) if (String(e.rows[i][e.col.EventID]) === String(id)) {
+    return { cal: cal_(who, e.rows[i][e.col.CalendarID]), row: i, e: e };
+  }
+  throw new Error('Event not found');
+}
+function updateEvent_(who, ev) {
+  var f = findEvent_(who, ev.id), start = parse_(ev.start), end = ev.end ? parse_(ev.end) : start;
+  if (ev.allDay) { start = parse_(String(ev.start).slice(0, 10)); end = parse_(String(ev.end || ev.start).slice(0, 10)); }
+  if (end < start) end = start;
+  if (f.gev) {
+    f.gev.setTitle(String(ev.title || ''));
+    f.gev.setDescription(String(ev.description || ''));
+    f.gev.setLocation(String(ev.location || ''));
+    if (ev.allDay) f.gev.setAllDayDates(start, new Date(end.getTime() + 86400000)); else f.gev.setTime(start, end);
+  } else {
+    var e = f.e, r = f.row;
+    setCell_(e, r, 'Title', String(ev.title || '')); setCell_(e, r, 'Description', String(ev.description || ''));
+    setCell_(e, r, 'Location', String(ev.location || '')); setCell_(e, r, 'Start', start); setCell_(e, r, 'End', end);
+    setCell_(e, r, 'AllDay', !!ev.allDay);
+  }
+  return { id: ev.id };
+}
+function deleteEvent_(who, ev) {
+  var f = findEvent_(who, ev.id);
+  if (f.gev) f.gev.deleteEvent();
+  else {
+    // Rows are never deleted: the event is emptied and marked, so it no longer shows.
+    setCell_(f.e, f.row, 'CalendarID', 'deleted:' + f.cal.id);
+  }
+  return { ok: true };
+}
+
+// ---------- admin ----------
+function needAdmin_(who) { if (!who.admin) throw new Error('Only the admin can do this'); }
+function adminInfo_(who) {
+  needAdmin_(who);
+  var u = src_('User'), team = [];
+  u.rows.forEach(function (r) {
+    if (truthy_(r[u.col.IsActive]) && r[u.col.Email]) team.push({ name: get_(u, r, 'FullName'), email: low_(r[u.col.Email]) });
+  });
+  var t = calTab_(), linked = {};
+  var cals = t.rows.map(function (r) { var c = calObj_(t, r); if (c.googleId) linked[c.googleId] = 1; return c; });
+  var google = [];
+  try {
+    CalendarApp.getAllCalendars().forEach(function (g) {
+      google.push({ id: g.getId(), name: g.getName(), color: g.getColor(), linked: !!linked[g.getId()] });
+    });
+  } catch (err) {}
+  return { ok: true, calendars: cals, team: team, google: google, colors: COLORS };
+}
+/** Create (App, new Google, or linked Google) or update a calendar. */
+function saveCalendar_(who, c) {
+  needAdmin_(who);
+  var t = calTab_(), shared = /^\s*everyone\s*$/i.test(c.sharedWith || '') ? 'Everyone' : emails_(c.sharedWith).join(', ');
+  for (var i = 0; i < t.rows.length; i++) if (c.id && String(t.rows[i][t.col.CalendarID]) === c.id) {
+    if (c.name) setCell_(t, i, 'Name', String(c.name));
+    if (c.color) setCell_(t, i, 'Color', String(c.color));
+    setCell_(t, i, 'SharedWith', shared);
+    if (c.active !== undefined) setCell_(t, i, 'IsActive', !!c.active);
+    var cur = calObj_(t, t.rows[i]);
+    if (cur.type === 'Google' && c.name) { try { gcal_(cur).setName(String(c.name)); } catch (err) {} }
+    return cur;
+  }
+  var type = c.type === 'Google' ? 'Google' : 'App', gid = '';
+  if (type === 'Google') {
+    if (c.googleId) gid = String(c.googleId);
+    else gid = CalendarApp.createCalendar(String(c.name || 'New calendar')).getId();
+    t.rows.forEach(function (r) { if (String(r[t.col.GoogleCalendarID]) === gid) throw new Error('That Google Calendar is already linked'); });
+    if (!CalendarApp.getCalendarById(gid)) throw new Error('Google Calendar not found');
+  }
+  var row = append_(t, { CalendarID: 'cal-' + hex_(8), Name: String(c.name || 'New calendar'), Color: c.color || COLORS[t.rows.length % COLORS.length],
+    Type: type, GoogleCalendarID: gid, SharedWith: shared || '', IsActive: true, CreatedAt: new Date() });
+  return calObj_(t, row);
 }

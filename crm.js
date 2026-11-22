@@ -30,6 +30,8 @@
     var c = cfg();
     if (!c.url) return Promise.reject(new Error('no-link'));
     body.key = c.key; body.me = c.me;
+    var ak = store.get('adminKey', '');
+    if (ak) body.adminKey = ak;
     // A text/plain body keeps this a "simple" request, which Google's server accepts from the browser.
     return fetch(c.url, { method: 'POST', body: JSON.stringify(body), keepalive: !!keepalive })
       .then(function (r) { return r.json(); })
@@ -98,7 +100,9 @@
     if (!cfg().url) { note('Tap ⚙︎ and add the CRM link to see the team\'s clients.'); return Promise.resolve(); }
     note('Syncing…');
     return api({ action: 'list' }).then(function (j) {
-      cache = { clients: j.clients, tasks: j.tasks, team: j.team || [], me: j.me || '', at: Date.now() };
+      cache = { clients: j.clients, tasks: j.tasks, team: j.team || [], me: j.me || '', calendars: j.calendars || [], isAdmin: !!j.isAdmin, at: Date.now() };
+      fillCalendars();
+      if (window.CAL) CAL.changed();
       queue.forEach(function (q) { if (q.action === 'save') applyLocal(q.client, q.task); });
       keep('crmCache2', cache);
       fillTeam();
@@ -137,13 +141,27 @@
       hint.textContent = 'New contact. Added to the CRM as a WhatsApp contact when you add the task.';
     }
   }
-  function recordTask() {
-    var q = formClient(), ev = A.eventData();
-    if (!q || !ev || !cfg().url) return;
+  function inAppCal() { var v = $('cal').value; return v.indexOf('c:') === 0 ? v.slice(2) : ''; }
+  function recordTask(e) {
+    var q = formClient(), ev = A.eventData(), calId = inAppCal();
+    if (calId && e && e.currentTarget === $('appBtn')) return; // just a phone reminder; the save happens on the main button
+    if (calId && e) e.preventDefault();
+    if (!ev || !cfg().url) { if (calId) $('calNote').textContent = 'Fill in a date first.'; return; }
     var due = $('date').value + ($('allDay').checked ? '' : ' ' + $('start').value);
     var ref = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     var desc = [$('desc').value.trim(), $('msg').value.trim() ? 'Message:\n' + $('msg').value.trim() : ''].filter(Boolean).join('\n\n');
-    var item = { action: 'save', client: q, task: { title: ev.title, due: due, description: desc, ref: ref } };
+    var slot = calId ? { calendarId: calId, start: $('date').value + ($('allDay').checked ? '' : 'T' + $('start').value),
+      end: ($('endDate').value || $('date').value) + ($('allDay').checked ? '' : 'T' + $('end').value), allDay: $('allDay').checked,
+      location: $('location').value.trim() } : {};
+    if (!q) {
+      if (!calId) return;
+      // No client: just an event on the chosen calendar.
+      queue.push({ action: 'addEvent', event: Object.assign({ title: ev.title, description: desc, ref: ref }, slot) });
+      keep('crmQueue2', queue);
+      done('Added to the ' + calName(calId) + ' calendar.');
+      return;
+    }
+    var item = { action: 'save', client: q, task: Object.assign({ title: ev.title, due: due, description: desc, ref: ref }, slot) };
     applyLocal(q, item.task);
     var jobs = [item];
     if ($('followUp').value) {
@@ -154,19 +172,42 @@
     jobs.forEach(function (j) { queue.push(j); });
     keep('crmQueue2', queue);
     render();
-    flush(true).then(list, function () {});
+    if (calId) done('Added to the ' + calName(calId) + ' calendar' + (q ? ' and to the client\'s record' : '') + '.');
+    else flush(true).then(list, function () {});
   }
+  function calName(id) { var c = (cache.calendars || []).filter(function (x) { return x.id === id; })[0]; return c ? c.name : ''; }
+  function done(msg) {
+    var chip = $('chip'); chip.className = 'chip ok'; chip.textContent = '✓ ' + msg + ' Saving…';
+    window.scrollTo(0, 0);
+    flush(true).then(function () { chip.textContent = '✓ ' + msg; if (window.CAL) CAL.changed(); return list(); },
+      function () { chip.className = 'chip warn'; chip.textContent = msg + ' It will upload when you are back online.'; });
+  }
+  function fillCalendars() {
+    var sel = $('cal'), keepVal = sel.value, grp = $('calLinkGroup');
+    Array.prototype.slice.call(sel.querySelectorAll('option[value^="c:"]')).forEach(function (o) { o.remove(); });
+    var og = sel.querySelector('optgroup[data-app]');
+    if (og) og.remove();
+    var cals = (cache.calendars || []).filter(function (c) { return c.active !== false; });
+    if (cals.length) {
+      og = document.createElement('optgroup'); og.label = 'Task Scheduler calendars'; og.setAttribute('data-app', '1');
+      cals.forEach(function (c) { var o = document.createElement('option'); o.value = 'c:' + c.id; o.textContent = '● ' + c.name; og.appendChild(o); });
+      sel.insertBefore(og, grp);
+    }
+    var pref = store.get('lastCal', '');
+    sel.value = keepVal && keepVal.indexOf('c:') === 0 && sel.querySelector('option[value="' + keepVal + '"]') ? keepVal
+      : pref && sel.querySelector('option[value="' + pref + '"]') ? pref : cals.length ? 'c:' + cals[0].id : (keepVal || 'team');
+    A.refreshLinks();
+  }
+  $('cal').addEventListener('change', function () { store.set('lastCal', $('cal').value); });
   $('addBtn').addEventListener('click', recordTask);
   $('appBtn').addEventListener('click', recordTask);
   ['company', 'status', 'followUp'].forEach(function (id) { $(id).addEventListener('change', matchForm); });
 
   // ---- Views ----
+  var VIEWS = { task: 'tabTask', cal: 'tabCal', ev: 'tabCal', adm: 'tabCal', clients: 'tabClients', detail: 'tabClients' };
   function show(view) {
-    $('taskView').classList.toggle('hidden', view !== 'task');
-    $('clientsView').classList.toggle('hidden', view !== 'clients');
-    $('detailView').classList.toggle('hidden', view !== 'detail');
-    $('tabTask').classList.toggle('on', view === 'task');
-    $('tabClients').classList.toggle('on', view !== 'task');
+    Object.keys(VIEWS).forEach(function (v) { $(v === 'task' ? 'taskView' : v + 'View').classList.toggle('hidden', v !== view); });
+    ['tabTask', 'tabCal', 'tabClients'].forEach(function (t) { $(t).classList.toggle('on', VIEWS[view] === t); });
     if (view !== 'detail') current = null;
     window.scrollTo(0, 0);
   }
@@ -346,8 +387,10 @@
     show('task'); matchForm(); A.refreshLinks(); $('msg').focus();
   };
 
-  window.CRM = { sync: sync, matchForm: matchForm, render: render };
+  window.CRM = { sync: sync, matchForm: matchForm, render: render, api: api, show: show, cfg: cfg,
+    state: function () { return cache; }, openClient: function (id) { var c = byId(id); if (c) open(c); },
+    queueItem: function (item) { queue.push(item); keep('crmQueue2', queue); return flush(); }, list: list };
   window.addEventListener('online', sync);
-  fillTeam(); render(); matchForm();
+  fillTeam(); fillCalendars(); render(); matchForm();
   if (cfg().url) sync();
 })();

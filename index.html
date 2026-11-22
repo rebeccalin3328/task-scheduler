@@ -7,14 +7,34 @@
 <meta name="theme-color" content="#075E54">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
+<script>
+  // Apply the saved theme before the page draws, so there is no flash.
+  (function () {
+    var FONTS = { kids: 'Baloo+2:wght@400;600;700', large: 'Atkinson+Hyperlegible:wght@400;700', pro: 'Inter:wght@400;600', pastel: 'Nunito:wght@400;600;700' };
+    window.applyTheme = function (t) {
+      try { t = t || localStorage.getItem('theme') || 'classic'; } catch (e) { t = t || 'classic'; }
+      document.documentElement.setAttribute('data-theme', t);
+      if (FONTS[t] && !document.getElementById('font-' + t)) {
+        var l = document.createElement('link'); l.id = 'font-' + t; l.rel = 'stylesheet';
+        l.href = 'https://fonts.googleapis.com/css2?family=' + FONTS[t] + '&display=swap';
+        document.head.appendChild(l);
+      }
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.content = { classic: '#075E54', kids: '#ff6b6b', large: '#003f8a', pro: '#1f3a5f', night: '#181a21', pastel: '#c3b1e1' }[t] || '#075E54';
+    };
+    applyTheme();
+  })();
+</script>
 <style>
   :root {
     --bg: #f4f6f5; --card: #ffffff; --ink: #1b1f1e; --muted: #5c6663; --line: #dfe4e2;
     --brand: #075E54; --brand-ink: #ffffff; --accent: #128C7E; --ok-bg: #e3f5ee; --ok-ink: #0b5a43;
     --warn-bg: #fff3d6; --warn-ink: #7a5300; --field: #fbfcfc;
+    --fs: 16px; --r: 14px; --rb: 12px; --bw: 1px; --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans SC", sans-serif;
+    --header: var(--brand); --today: var(--brand); --cell: 64px; --pill: 11px;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme]), :root[data-theme="classic"] {
       --bg: #0f1413; --card: #182120; --ink: #e8eeec; --muted: #9aa8a4; --line: #2a3634;
       --brand: #0d7a6d; --accent: #3cc3ae; --ok-bg: #12352c; --ok-ink: #8fe3c6;
       --warn-bg: #3a2e10; --warn-ink: #f3cf7a; --field: #121a19;
@@ -22,17 +42,17 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans SC", sans-serif; }
-  header { background: var(--brand); color: var(--brand-ink); padding: 14px 16px; padding-top: max(14px, env(safe-area-inset-top));
+    font: var(--fs)/1.45 var(--font); }
+  header { background: var(--header); color: var(--brand-ink); padding: 14px 16px; padding-top: max(14px, env(safe-area-inset-top));
     display: flex; align-items: center; justify-content: space-between; }
   header h1 { font-size: 18px; margin: 0; font-weight: 600; }
   header button { background: transparent; border: 0; color: inherit; font-size: 22px; padding: 4px 8px; cursor: pointer; }
   main { max-width: 560px; margin: 0 auto; padding: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .card { background: var(--card); border: var(--bw) solid var(--line); border-radius: var(--r); padding: 16px; margin-bottom: 14px; }
   label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin: 12px 0 6px; }
   label:first-child { margin-top: 0; }
   input, textarea, select { width: 100%; font: inherit; color: var(--ink); background: var(--field);
-    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+    border: var(--bw) solid var(--line); border-radius: calc(var(--r) * .7); padding: 10px 12px; }
   textarea { min-height: 84px; resize: vertical; }
   input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
   .row { display: flex; gap: 10px; }
@@ -42,17 +62,18 @@
   .chip { border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-top: 12px; }
   .chip.ok { background: var(--ok-bg); color: var(--ok-ink); }
   .chip.warn { background: var(--warn-bg); color: var(--warn-ink); }
-  .btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 14px; font: inherit; font-weight: 600;
+  .btn { display: block; width: 100%; border: 0; border-radius: var(--rb); padding: 14px; font: inherit; font-weight: 600;
     text-align: center; text-decoration: none; cursor: pointer; }
   .btn.primary { background: var(--brand); color: var(--brand-ink); font-size: 17px; }
   .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); margin-top: 10px; }
   .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
   .hidden { display: none; }
   details summary { cursor: pointer; font-weight: 600; }
-  .tabs { display: flex; background: var(--brand); padding: 0 8px; position: sticky; top: 0; z-index: 2; }
+  .tabs { display: flex; background: var(--header); padding: 0 8px; position: sticky; top: 0; z-index: 2; }
   .tabs button { flex: 1; background: transparent; border: 0; color: var(--brand-ink); opacity: .75; font: inherit; font-weight: 600;
     padding: 10px 6px 12px; border-bottom: 3px solid transparent; cursor: pointer; }
   .tabs button.on { opacity: 1; border-bottom-color: var(--brand-ink); }
+  .count.hidden { display: none; }
   .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: #e53935; color: #fff; font-size: 12px; line-height: 20px; }
   h2 { font-size: 15px; margin: 0 0 8px; }
   .client { display: flex; align-items: center; gap: 12px; padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
@@ -77,6 +98,90 @@
   .task .meta { flex: 1; min-width: 0; }
   .task.done .tt { text-decoration: line-through; color: var(--muted); }
   .task small { display: block; color: var(--muted); }
+  .calbar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .calbar h2 { flex: 1; margin: 0; font-size: 17px; text-align: center; }
+  .calbar button, .calbar select { width: auto; flex: none; margin: 0; padding: 8px 12px; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; }
+  .chips button { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 16px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  .chips button.off { opacity: .45; text-decoration: line-through; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .month { display: grid; grid-template-columns: repeat(7, 1fr); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+  .month .dow { font-size: 11px; font-weight: 600; color: var(--muted); text-align: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .month .day { min-height: var(--cell); border-top: 1px solid var(--line); border-left: 1px solid var(--line); padding: 3px; font-size: 12px; cursor: pointer; overflow: hidden; }
+  .month .day:nth-child(7n+1) { border-left: 0; }
+  .month .day.other { opacity: .45; }
+  .month .num { font-weight: 600; display: inline-block; min-width: 22px; text-align: center; border-radius: 11px; line-height: 22px; }
+  .month .today .num { background: var(--today); color: var(--brand-ink); }
+  .month .pill { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--pill); line-height: 16px; border-radius: 4px; padding: 0 3px; margin-top: 2px; color: #fff; }
+  .month .more { font-size: 11px; color: var(--muted); }
+  .agenda h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .agenda h3.today { color: var(--accent); }
+  .ev { display: flex; gap: 10px; align-items: stretch; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 6px; cursor: pointer; }
+  .ev .bar { width: 4px; border-radius: 2px; flex: none; }
+  .ev .meta { flex: 1; min-width: 0; }
+  .ev .tt { font-weight: 600; }
+  .ev small { display: block; color: var(--muted); }
+  .fab { position: fixed; right: 18px; bottom: max(18px, env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 50%; border: 0;
+    background: var(--brand); color: var(--brand-ink); font-size: 28px; box-shadow: 0 4px 12px rgba(0,0,0,.25); cursor: pointer; z-index: 3; }
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+  .swatches button { width: 32px; height: 32px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; }
+  .swatches button.on { border-color: var(--ink); }
+  .people label { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; color: var(--ink); margin: 8px 0; }
+  .people input { width: 20px; height: 20px; margin: 0; }
+  /* ---------- Themes (chosen per person in ⚙︎, saved on their phone) ---------- */
+  :root[data-theme="kids"] {
+    --bg: #fff8e1; --card: #ffffff; --ink: #2d2a32; --muted: #6d6875; --line: #ffd6a5; --field: #fffdf6;
+    --brand: #ff6b6b; --brand-ink: #ffffff; --accent: #4d96ff; --ok-bg: #d8f5d0; --ok-ink: #2b7a0b; --warn-bg: #fff1b8; --warn-ink: #8a5a00;
+    --fs: 18px; --r: 24px; --rb: 999px; --bw: 2px; --font: "Baloo 2", "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif;
+    --header: linear-gradient(90deg, #ff6b6b, #ffa94d, #ffd43b, #69db7c, #4dabf7, #9775fa); --today: #9775fa; --cell: 72px; --pill: 12px;
+  }
+  :root[data-theme="kids"] header h1::after { content: " 🌈"; }
+  :root[data-theme="kids"] header, :root[data-theme="kids"] .tabs button { text-shadow: 0 1px 3px rgba(0,0,0,.45); }
+  :root[data-theme="kids"] .tabs button { opacity: 1; }
+  :root[data-theme="pastel"] .tabs button { opacity: .85; } :root[data-theme="pastel"] .tabs button.on { opacity: 1; }
+  :root[data-theme="kids"] .month .dow:nth-child(7n+1) { color: #ff6b6b; } :root[data-theme="kids"] .month .dow:nth-child(7n+2) { color: #ffa94d; }
+  :root[data-theme="kids"] .month .dow:nth-child(7n+3) { color: #e0a800; } :root[data-theme="kids"] .month .dow:nth-child(7n+4) { color: #37b24d; }
+  :root[data-theme="kids"] .month .dow:nth-child(7n+5) { color: #4dabf7; } :root[data-theme="kids"] .month .dow:nth-child(7n+6) { color: #9775fa; }
+  :root[data-theme="kids"] .month .dow:nth-child(7n) { color: #f06595; }
+  :root[data-theme="kids"] .fab { background: linear-gradient(135deg, #ff6b6b, #9775fa); }
+
+  :root[data-theme="large"] {
+    --bg: #ffffff; --card: #ffffff; --ink: #000000; --muted: #333333; --line: #1a1a1a; --field: #ffffff;
+    --brand: #003f8a; --brand-ink: #ffffff; --accent: #003f8a; --ok-bg: #e6f0ff; --ok-ink: #002a5c; --warn-bg: #fff2cc; --warn-ink: #5c3d00;
+    --fs: 21px; --r: 10px; --rb: 10px; --bw: 2px; --font: "Atkinson Hyperlegible", Verdana, system-ui, sans-serif;
+    --today: #c40000; --cell: 84px; --pill: 14px;
+  }
+  :root[data-theme="large"] label { color: #000; font-size: 17px; }
+  :root[data-theme="large"] .month .num { font-size: 18px; }
+  :root[data-theme="large"] .btn.secondary { border-width: 2px; border-color: #003f8a; }
+  :root[data-theme="large"] .tabs button { font-size: 19px; opacity: 1; }
+
+  :root[data-theme="pro"] {
+    --bg: #f3f5f8; --card: #ffffff; --ink: #1c2430; --muted: #5b6676; --line: #dde2ea; --field: #ffffff;
+    --brand: #1f3a5f; --brand-ink: #ffffff; --accent: #2f6fb3; --ok-bg: #e7f0fa; --ok-ink: #1f4f86; --warn-bg: #fdf1dc; --warn-ink: #7a4f06;
+    --fs: 15px; --r: 6px; --rb: 6px; --bw: 1px; --font: "Inter", "Segoe UI", system-ui, sans-serif; --today: #2f6fb3; --cell: 60px; --pill: 11px;
+  }
+
+  :root[data-theme="night"] {
+    --bg: #0e0f13; --card: #181a21; --ink: #e9e9ee; --muted: #9a9cab; --line: #2a2d38; --field: #12141a;
+    --brand: #232634; --brand-ink: #ffffff; --accent: #a78bfa; --ok-bg: #1f2b25; --ok-ink: #8ce0b0; --warn-bg: #352b14; --warn-ink: #f5cf7a;
+    --fs: 16px; --r: 14px; --rb: 12px; --bw: 1px; --header: #181a21; --today: #a78bfa; --cell: 64px; --pill: 11px;
+  }
+  :root[data-theme="night"] .btn.primary, :root[data-theme="night"] .fab { background: #7c5cf0; }
+
+  :root[data-theme="pastel"] {
+    --bg: #fbf7ff; --card: #ffffff; --ink: #3b3446; --muted: #7d7489; --line: #ece4f5; --field: #fdfbff;
+    --brand: #b49bdc; --brand-ink: #3b2a55; --accent: #4f8f86; --ok-bg: #e5f4f1; --ok-ink: #2f6e64; --warn-bg: #fdf0e3; --warn-ink: #8a5a2b;
+    --fs: 16px; --r: 20px; --rb: 16px; --bw: 1px; --font: "Nunito", system-ui, sans-serif;
+    --header: linear-gradient(120deg, #c3b1e1, #f4c2c2); --today: #e89fb5; --cell: 64px; --pill: 11px;
+  }
+  .themes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .theme { display: flex; flex-direction: column; justify-content: flex-start; align-items: stretch; border: 2px solid var(--line); border-radius: 12px; padding: 0; overflow: hidden; cursor: pointer; background: #fff; text-align: left; font: inherit; color: #222; }
+  .theme.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  .theme .bar { height: 26px; }
+  .theme .body { padding: 8px 10px; }
+  .theme b { display: block; font-size: 14px; }
+  .theme small { display: block; font-size: 12px; color: #555; line-height: 1.3; }
   .empty { padding: 16px; text-align: center; color: var(--muted); font-size: 14px; }
   ol { padding-left: 20px; margin: 8px 0 0; font-size: 14px; color: var(--muted); }
 </style>
@@ -88,10 +193,13 @@
 </header>
 <nav class="tabs">
   <button id="tabTask" class="on">New task</button>
+  <button id="tabCal">Calendar</button>
   <button id="tabClients">Clients <span id="dueCount" class="count hidden"></span></button>
 </nav>
 <main>
   <section class="card hidden" id="settings">
+    <label>Look and feel</label>
+    <div class="themes" id="themes"></div>
     <label for="calId">Team calendar ID</label>
     <input id="calId" placeholder="e.g. abc123@group.calendar.google.com" autocomplete="off">
     <p class="hint">Find it in Google Calendar on a computer: Settings → your team calendar → Integrate calendar → Calendar ID. Leave empty to use your own calendar.</p>
@@ -107,6 +215,8 @@
       <div><label for="crmKey">Team key</label><input id="crmKey" autocomplete="off"></div>
       <div><label for="me">Your work email</label><input id="me" type="email" placeholder="you@airnergy.my" autocomplete="off"></div>
     </div>
+    <label for="adminKey">Admin key (Rebecca only)</label>
+    <input id="adminKey" type="password" autocomplete="off" placeholder="Leave empty">
     <p class="hint">Ask Rebecca for the CRM link and team key. Use the email you have in the team's User list, so tasks are assigned to you. Every task with a contact is then saved to the team's CRM sheet.</p>
     <button class="btn secondary" id="saveSettings">Save</button>
   </section>
@@ -172,7 +282,7 @@
     <textarea id="desc" placeholder="Notes for the event"></textarea>
     <div class="row">
       <div><label for="cal">Calendar</label>
-        <select id="cal"><option value="team">Team calendar</option><option value="mine">My calendar</option></select></div>
+        <select id="cal"><optgroup label="Google Calendar link" id="calLinkGroup"><option value="team">Team calendar (Google)</option><option value="mine">My calendar (Google)</option></optgroup></select></div>
       <div><label for="busy">Show as</label>
         <select id="busy"><option value="true">Busy</option><option value="false">Free</option></select></div>
     </div>
@@ -195,6 +305,80 @@
       </ol>
     </details>
   </section>
+  </div>
+
+  <div id="calView" class="hidden">
+    <div class="calbar">
+      <button class="btn secondary" id="calPrev" aria-label="Previous">‹</button>
+      <button class="btn secondary" id="calToday">Today</button>
+      <button class="btn secondary" id="calNext" aria-label="Next">›</button>
+      <h2 id="calTitle"></h2>
+      <select id="calMode"><option value="month">Month</option><option value="week">Week</option><option value="day">Day</option></select>
+    </div>
+    <div class="chips" id="calChips"></div>
+    <div id="calBody"></div>
+    <p class="hint" id="calStatus"></p>
+    <button class="btn secondary hidden" id="calManage">⚙︎ Manage calendars (admin)</button>
+    <div style="height:70px"></div>
+    <button class="fab" id="calAdd" aria-label="Add event">＋</button>
+  </div>
+
+  <div id="evView" class="hidden">
+    <button class="btn secondary" id="evBack" style="margin:0 0 14px">← Calendar</button>
+    <section class="card">
+      <label for="evTitle">Title</label><input id="evTitle">
+      <label for="evCal">Calendar</label><select id="evCal"></select>
+      <div class="row">
+        <div><label for="evDate">Start date</label><input id="evDate" type="date"></div>
+        <div><label for="evEndDate">End date</label><input id="evEndDate" type="date"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="evAllDay"> All day</label>
+      <div class="row" id="evTimeRow">
+        <div><label for="evStart">Start</label><input id="evStart" type="time"></div>
+        <div><label for="evEnd">End</label><input id="evEnd" type="time"></div>
+      </div>
+      <label for="evLoc">Location</label><input id="evLoc">
+      <label for="evDesc">Notes</label><textarea id="evDesc"></textarea>
+      <p class="hint" id="evMeta"></p>
+      <button class="btn secondary hidden" id="evClient">👤 Open client</button>
+      <button class="btn primary" id="evSave" style="margin-top:14px">Save</button>
+      <button class="btn secondary hidden" id="evDelete" style="color:#c62828">Delete</button>
+      <p class="hint" id="evNote"></p>
+    </section>
+  </div>
+
+  <div id="admView" class="hidden">
+    <button class="btn secondary" id="admBack" style="margin:0 0 14px">← Calendar</button>
+    <section class="card" style="padding:12px 4px">
+      <h2 style="padding:0 12px">Calendars</h2>
+      <div id="admList"></div>
+    </section>
+    <div class="row">
+      <button class="btn secondary" id="admNewApp" style="margin-top:0">＋ App calendar</button>
+      <button class="btn secondary" id="admNewGoogle" style="margin-top:0">＋ Google Calendar</button>
+    </div>
+    <section class="card" style="margin-top:14px">
+      <label for="admLinkSel">Link an existing Google Calendar</label>
+      <div class="row">
+        <div><select id="admLinkSel"></select></div>
+        <button class="btn secondary" id="admLink" style="flex:0 0 auto;width:auto;margin-top:0;padding:10px 14px">🔗 Link</button>
+      </div>
+      <p class="hint">Lists the Google Calendars your account (the CRM owner) can see. Events added in the app go straight into it.</p>
+    </section>
+    <section class="card hidden" id="admEdit">
+      <h2 id="admEditTitle">Calendar</h2>
+      <label for="admName">Name</label><input id="admName">
+      <label>Colour</label><div class="swatches" id="admColors"></div>
+      <label>Shared with</label>
+      <label class="check"><input type="radio" name="admShare" id="admEveryone" value="Everyone"> Everyone in the team</label>
+      <label class="check"><input type="radio" name="admShare" id="admChosen" value="chosen"> Only these people</label>
+      <div class="people" id="admPeople"></div>
+      <label class="check"><input type="checkbox" id="admActive"> Active (uncheck to hide it from everyone)</label>
+      <p class="hint" id="admType"></p>
+      <button class="btn primary" id="admSave" style="margin-top:14px">Save calendar</button>
+      <p class="hint" id="admNote"></p>
+    </section>
+    <p class="hint" id="admStatus"></p>
   </div>
 
   <div id="clientsView" class="hidden">
@@ -262,6 +446,7 @@
 
 <script src="parser.js"></script>
 <script src="crm.js" defer></script>
+<script src="cal.js" defer></script>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -272,6 +457,27 @@
   var pad = function (n) { return String(n).padStart(2, '0'); };
   var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kuala_Lumpur';
 
+  // Themes: each person picks their own; saved on this phone.
+  var THEMES = [
+    ['classic', 'Classic', 'WhatsApp green. Follows your phone\'s dark mode.', '#075E54'],
+    ['kids', 'Rainbow', 'Big, bright and bubbly. Great for kids.', 'linear-gradient(90deg,#ff6b6b,#ffa94d,#ffd43b,#69db7c,#4dabf7,#9775fa)'],
+    ['large', 'Big & Clear', 'Large text and strong contrast. Easy on the eyes.', '#003f8a'],
+    ['pro', 'Professional', 'Navy and grey. Compact for busy days.', '#1f3a5f'],
+    ['night', 'Night', 'Dark, with purple highlights. Easy at night.', '#181a21'],
+    ['pastel', 'Pastel', 'Soft lilac and pink. Calm and minimal.', 'linear-gradient(120deg,#c3b1e1,#f4c2c2)']
+  ];
+  function drawThemes() {
+    var cur = document.documentElement.getAttribute('data-theme'), box = $('themes'); box.innerHTML = '';
+    THEMES.forEach(function (t) {
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'theme' + (t[0] === cur ? ' on' : '');
+      b.innerHTML = '<div class="bar"></div><div class="body"><b></b><small></small></div>';
+      b.querySelector('.bar').style.background = t[3]; b.querySelector('b').textContent = t[1]; b.querySelector('small').textContent = t[2];
+      b.onclick = function () { store.set('theme', t[0]); applyTheme(t[0]); drawThemes(); };
+      box.appendChild(b);
+    });
+  }
+  drawThemes();
+
   // Settings
   $('calId').value = store.get('calId', '');
   $('duration').value = store.get('duration', '60');
@@ -279,12 +485,14 @@
   $('crmUrl').value = store.get('crmUrl', '');
   $('crmKey').value = store.get('crmKey', '');
   $('me').value = store.get('me', '');
+  $('adminKey').value = store.get('adminKey', '');
   $('saveSettings').onclick = function () {
     store.set('calId', $('calId').value.trim());
     store.set('duration', $('duration').value);
     store.set('crmUrl', $('crmUrl').value.trim());
     store.set('crmKey', $('crmKey').value.trim());
     store.set('me', $('me').value.trim());
+    store.set('adminKey', $('adminKey').value.trim());
     if (window.CRM) CRM.sync();
     $('settings').classList.add('hidden');
     refreshLinks();
@@ -428,11 +636,16 @@
   function refreshLinks() {
     var ev = eventData();
     var ok = !!ev;
-    $('addBtn').href = ok ? webLink(ev) : '#';
-    $('addBtn').textContent = $('cal').value === 'mine' ? 'Add to my calendar' : 'Add to team calendar';
+    var inApp = $('cal').value.indexOf('c:') === 0;
+    $('addBtn').href = ok ? (inApp ? '#' : webLink(ev)) : '#';
+    $('addBtn').target = inApp ? '' : '_blank';
+    $('addBtn').textContent = inApp ? 'Add to ' + $('cal').selectedOptions[0].textContent.replace(/^● /, '') + ' calendar'
+      : $('cal').value === 'mine' ? 'Add to my calendar' : 'Add to team calendar';
     $('appBtn').href = ok ? appLink(ev) : '#';
+    $('appBtn').textContent = inApp ? '⏰ Also add a reminder on my phone' : 'Open in Calendar app instead';
     $('addBtn').style.opacity = $('appBtn').style.opacity = ok ? 1 : 0.5;
-    $('calNote').textContent = $('cal').value === 'mine'
+    $('calNote').textContent = inApp ? 'Saves to the Task Scheduler calendar, shared with whoever the calendar is shared with.'
+      : $('cal').value === 'mine'
       ? 'Saves to your own calendar.'
       : store.get('calId', '')
       ? 'Saves to your team calendar. In the Calendar app, pick the team calendar before saving.'

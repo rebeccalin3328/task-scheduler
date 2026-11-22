@@ -2,7 +2,7 @@
 // Runs crm-script.gs against a fake airnergy_crm_backend (made-up data, real column names) and a fake, empty CRM sheet.
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 
-function fakeSheet(tabs) {
+function fakeSheet(tabs, patch) {
   const source = {}, sheets = {};
   Object.keys(tabs).forEach(n => { source[n] = { rows: tabs[n].map(r => r.slice()) }; });
   const api = sh => ({
@@ -15,12 +15,30 @@ function fakeSheet(tabs) {
     })
   });
   const props = {};
+  // Fake Google Calendar
+  const gcals = {};
+  const mkCal = (id, name) => {
+    const evs = [];
+    const cal = { id, name, evs, getId: () => id, getName: () => name, getColor: () => '#039be5', setName(n) { name = n; },
+      getEvents: (a, b) => evs.filter(e => !e.gone && e.end > a && e.start < b).map(wrap),
+      getEventById: gid => wrap(evs.find(e => e.id === gid)),
+      createEvent: (t, s0, e0, o) => wrap(evs[evs.push({ id: 'gev' + evs.length, title: t, start: s0, end: e0, allDay: false, desc: o.description }) - 1]),
+      createAllDayEvent: (t, s0, e0, o) => wrap(evs[evs.push({ id: 'gev' + evs.length, title: t, start: s0, end: e0, allDay: true, desc: o.description }) - 1]) };
+    const wrap = e => e && ({ getId: () => e.id, getTitle: () => e.title, getDescription: () => e.desc || '', getLocation: () => '',
+      getStartTime: () => e.start, getEndTime: () => e.end, isAllDayEvent: () => e.allDay, setTitle: v => { e.title = v; },
+      setDescription: v => { e.desc = v; }, setLocation() {}, setTime: (a, b) => { e.start = a; e.end = b; }, setAllDayDates: (a, b) => { e.start = a; e.end = b; },
+      deleteEvent: () => { e.gone = true; } });
+    return (gcals[id] = cal);
+  };
+  mkCal('sales@group.calendar.google.com', 'Sales');
   let n = 0;
   const ctx = {
     SpreadsheetApp: {
       openById: () => ({ getSheetByName: nm => source[nm] && api(source[nm]) }),
       getActiveSpreadsheet: () => ({ getSheetByName: nm => sheets[nm] && api(sheets[nm]), insertSheet: nm => api(sheets[nm] = { rows: [] }) })
     },
+    CalendarApp: { getCalendarById: id => gcals[id] || null, getAllCalendars: () => Object.values(gcals),
+      createCalendar: name => mkCal('new' + Object.keys(gcals).length + '@group.calendar.google.com', name) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
@@ -33,8 +51,9 @@ function fakeSheet(tabs) {
     Session: { getScriptTimeZone: () => 'Asia/Kuala_Lumpur' }, JSON, String, Object, Math, Date
   };
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(__dirname + '/crm-script.gs', 'utf8'), ctx);
-  return { sheets, source, props, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
+  const code = fs.readFileSync(__dirname + '/crm-script.gs', 'utf8');
+  vm.runInContext(patch ? patch(code) : code, ctx);
+  return { sheets, source, props, gcals, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
 }
 
 const tabs = {
@@ -104,7 +123,7 @@ assert.equal(rows('Task')[1][10], 'Done');
 
 // The master sheet was never written to
 assert.equal(JSON.stringify(Object.fromEntries(Object.entries(G.source).map(([k, v]) => [k, v.rows]))), masterBefore, 'airnergy_crm_backend unchanged');
-assert.deepEqual(Object.keys(G.sheets).sort(), ['Activity', 'Contact', 'ContactPerson', 'Task'], 'CRM sheet has only the CRM tabs (no User copy)');
+assert.deepEqual(Object.keys(G.sheets).sort(), ['Activity', 'Calendar', 'Contact', 'ContactPerson', 'Task'], 'CRM sheet has only the CRM tabs (no User copy)');
 
 // Hourly copy: master changes flow in, CRM notes and WhatsApp contacts are kept
 G.source.Contact.rows[1][5] = '+6012-0000000';           // AutoCount phone changed
@@ -119,5 +138,76 @@ assert.equal(alpha.phone, '+6012-0000000'); assert.equal(alpha.notes, 'Wants bul
 assert.ok(l3.clients.some(c => c.id === 'c-cccccccccccc'), 'new master contact copied');
 assert.ok(l3.clients.some(c => c.id === newId), 'WhatsApp contact kept');
 assert.equal(l3.clients.length, 4);
+
+// ---------- Calendars ----------
+// Default Team calendar, shared with everyone; admin tools refused without the admin key
+let L = call({ action: 'list' });
+assert.deepEqual(L.calendars.map(c => c.name), ['Team']); assert.equal(L.isAdmin, false);
+assert.equal(call({ action: 'saveCalendar', calendar: { name: 'X' } }).ok, false, 'not admin: refused');
+assert.equal(call({ action: 'adminInfo', adminKey: 'change-me-too' }).ok, false, 'default admin key never works');
+
+// Admin (with the key set) creates calendars and chooses who sees them
+const tabs3 = JSON.parse(masterBefore);
+tabs3.User.push(['U-2', 'Siti Staff', 'siti@example.my', '', '', '', '', true, '', '', '', '', '', '', '', ''],
+                ['U-3', 'Ahmad Tech', 'ahmad@example.my', '', '', '', '', true, '', '', '', '', '', '', '', '']);
+const G3 = fakeSheet(tabs3, src => src.replace("var ADMIN_KEY = 'change-me-too';", "var ADMIN_KEY = 'boss';"));
+const as = (email, b, adminKey) => G3.call(Object.assign({ key, me: email }, adminKey ? { adminKey } : {}, b));
+const boss = b => as('rebecca@example.my', b, 'boss');
+
+const info = boss({ action: 'adminInfo' });
+assert.ok(info.ok, info.error);
+assert.deepEqual(info.team.map(t => t.email), ['rebecca@example.my', 'siti@example.my', 'ahmad@example.my']);
+assert.deepEqual(info.google.map(g => g.name), ['Sales']);
+assert.equal(as('siti@example.my', { action: 'adminInfo' }, 'guess').ok, false, 'wrong admin key refused');
+
+const service = boss({ action: 'saveCalendar', calendar: { name: 'Service', type: 'App', sharedWith: 'ahmad@example.my' } }).calendar;
+const sales = boss({ action: 'saveCalendar', calendar: { name: 'Sales', type: 'Google', googleId: 'sales@group.calendar.google.com', sharedWith: 'siti@example.my, rebecca@example.my' } }).calendar;
+const made = boss({ action: 'saveCalendar', calendar: { name: 'Projects', type: 'Google', sharedWith: 'Everyone' } }).calendar;
+assert.ok(made.googleId && G3.gcals[made.googleId], 'new Google Calendar created');
+assert.equal(boss({ action: 'saveCalendar', calendar: { name: 'Again', type: 'Google', googleId: 'sales@group.calendar.google.com' } }).ok, false, 'no double link');
+
+const seen = email => as(email, { action: 'list' }).calendars.map(c => c.name).sort().join(',');
+assert.equal(seen('siti@example.my'), 'Projects,Sales,Team');
+assert.equal(seen('ahmad@example.my'), 'Projects,Service,Team');
+assert.equal(seen('nobody@x.my'), 'Projects,Team');
+assert.ok(!JSON.stringify(as('siti@example.my', { action: 'list' }).calendars).includes('group.calendar'), 'Google IDs hidden from staff');
+
+// Events: app calendar and Google calendar, with access checks
+assert.equal(as('siti@example.my', { action: 'addEvent', event: { calendarId: service.id, title: 'x', start: '2026-11-24T10:00' } }).ok, false, 'Siti cannot use Service');
+let ev = as('ahmad@example.my', { action: 'addEvent', event: { calendarId: service.id, title: 'Aircond service', start: '2026-11-24T10:00', end: '2026-11-24T12:00', ref: 'e1' } });
+assert.ok(ev.ok, ev.error);
+as('ahmad@example.my', { action: 'addEvent', event: { calendarId: service.id, title: 'Aircond service', start: '2026-11-24T10:00', ref: 'e1' } });
+let g = as('siti@example.my', { action: 'addEvent', event: { calendarId: sales.id, title: 'Meet ABC', start: '2026-11-25', end: '2026-11-25', allDay: true } });
+assert.ok(g.ok, g.error); assert.equal(G3.gcals['sales@group.calendar.google.com'].evs.length, 1, 'written to Google Calendar');
+
+const week = email => as(email, { action: 'events', from: '2026-11-23', to: '2026-11-30' }).events.map(e => e.title + '@' + e.start).sort();
+assert.deepEqual(week('ahmad@example.my'), ['Aircond service@2026-11-24T10:00']);
+assert.deepEqual(week('siti@example.my'), ['Meet ABC@2026-11-25T00:00']);
+assert.equal(week('rebecca@example.my').length, 1, 'Rebecca (no admin key) sees only calendars shared with her');
+assert.equal(as('rebecca@example.my', { action: 'events', from: '2026-11-23', to: '2026-11-30' }, 'boss').events.length, 2, 'admin sees all');
+
+// Task with a calendar from the New task form also creates the event, linked to the client
+const t2 = as('siti@example.my', { action: 'save', client: { phone: '012-322 3360' },
+  task: { title: 'Quote follow-up', due: '2026-11-26 09:00', ref: 't9', calendarId: sales.id, start: '2026-11-26T09:00', end: '2026-11-26T10:00' } });
+assert.ok(t2.ok && t2.event, t2.error);
+const sitiWeek = as('siti@example.my', { action: 'events', from: '2026-11-23', to: '2026-11-30' }).events;
+const linked = sitiWeek.find(e => e.title === 'Quote follow-up');
+assert.equal(linked.contactId, 'c-aaaaaaaaaaaa'); assert.ok(linked.taskId);
+
+// Edit and delete
+const appEv = as('ahmad@example.my', { action: 'events', from: '2026-11-23', to: '2026-11-30' }).events[0];
+assert.ok(as('ahmad@example.my', { action: 'updateEvent', event: Object.assign({}, appEv, { title: 'Aircond service (2 units)', start: '2026-11-24T14:00', end: '2026-11-24T16:00' }) }).ok);
+assert.deepEqual(week('ahmad@example.my'), ['Aircond service (2 units)@2026-11-24T14:00']);
+assert.ok(as('siti@example.my', { action: 'deleteEvent', event: { id: linked.id } }).ok);
+assert.ok(as('ahmad@example.my', { action: 'deleteEvent', event: { id: appEv.id } }).ok);
+assert.deepEqual(week('ahmad@example.my'), []);
+assert.deepEqual(week('siti@example.my'), ['Meet ABC@2026-11-25T00:00']);
+
+// Unshare: Ahmad loses Service
+boss({ action: 'saveCalendar', calendar: { id: service.id, sharedWith: 'siti@example.my' } });
+assert.equal(seen('ahmad@example.my'), 'Projects,Team');
+assert.equal(seen('siti@example.my'), 'Projects,Sales,Service,Team');
+assert.equal(JSON.stringify(Object.fromEntries(Object.entries(G3.source).map(([k, v]) => [k, v.rows]))), JSON.stringify(tabs3), 'master still unchanged');
+
 
 console.log('CRM sheet script: all checks passed');
