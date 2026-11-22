@@ -231,6 +231,12 @@ assert.ok(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === st
 as('ahmad@example.my', { action: 'taskStatus', taskId: stTask.taskId, status: 'In progress' });
 assert.equal(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === stTask.taskId).completed, '', 'reopening clears it');
 assert.equal(as('ahmad@example.my', { action: 'taskStatus', taskId: stTask.taskId, status: 'Bogus' }).ok, false);
+assert.equal(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === stTask.taskId).priority, 'Normal', 'default priority');
+as('ahmad@example.my', { action: 'taskPriority', taskId: stTask.taskId, priority: 'Urgent' });
+assert.equal(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === stTask.taskId).priority, 'Urgent');
+assert.equal(as('ahmad@example.my', { action: 'taskPriority', taskId: stTask.taskId, priority: 'Whenever' }).ok, false);
+const hp = as('ahmad@example.my', { action: 'save', client: { none: true }, task: { title: 'Imported high', due: '2026-12-03', ref: 'hp1', priority: 'High' } });
+assert.equal(as('ahmad@example.my', { action: 'list' }).tasks.find(t => t.id === hp.taskId).priority, 'High', 'priority can come with a new task');
 const evBefore = boss({ action: 'events', from: '2026-12-02', to: '2026-12-03' }).events.filter(e => e.taskId === stTask.taskId).length;
 assert.equal(evBefore, 1);
 as('ahmad@example.my', { action: 'deleteTask', taskId: stTask.taskId });

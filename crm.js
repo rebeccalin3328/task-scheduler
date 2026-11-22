@@ -348,10 +348,14 @@
   }
   // ---- Tasks: status, hide closed, delete ----
   var STATUSES = ['New', 'In progress', 'Waiting', 'Done', 'Cancelled'];
+  var PRIORITIES = ['Urgent', 'High', 'Normal', 'Low'], P_ICON = { Urgent: '🔴', High: '🟠', Normal: '⚪', Low: '🔵' };
   var taskLimit = 30;
+  function prio(t) { var i = PRIORITIES.indexOf(t.priority || 'Normal'); return i < 0 ? 2 : i; }
+  // Open tasks first, then by priority (Urgent first), then by due date.
   function byDue(a, b) {
     if (isOpen(a) !== isOpen(b)) return isOpen(a) ? -1 : 1;
     if (!isOpen(a)) return String(b.completed || b.created).localeCompare(String(a.completed || a.created));
+    if (prio(a) !== prio(b)) return prio(a) - prio(b);
     var x = dueDay(a) || '9999', y = dueDay(b) || '9999';
     return x < y ? -1 : x > y ? 1 : 0;
   }
@@ -366,12 +370,17 @@
     m.appendChild(el('small', late ? 'due' : '', [t.due ? (dueDay(t) === today() ? 'Today' : 'Due ' + t.due) : '', who, t.assignee].filter(Boolean).join(' · ')));
     r.appendChild(m);
     var pending = /^pending-/.test(t.id);
+    var ctl = el('div', 'ctl');
+    var pr = el('select', 'pr'); pr.setAttribute('aria-label', 'Priority');
+    PRIORITIES.forEach(function (v) { var o = el('option', '', P_ICON[v] + ' ' + v); o.value = v; pr.appendChild(o); });
+    pr.value = PRIORITIES[prio(t)]; pr.setAttribute('data-p', pr.value); pr.disabled = pending;
+    pr.onchange = function () { t.priority = pr.value; taskChanged({ action: 'taskPriority', taskId: t.id, priority: pr.value }); };
     var sel = el('select', 'st'); sel.setAttribute('aria-label', 'Status');
     var cur = STATUSES.indexOf(t.status) >= 0 ? t.status : (isOpen(t) ? 'New' : 'Done');
     STATUSES.forEach(function (v) { var o = el('option', '', v); o.value = v; sel.appendChild(o); });
     sel.value = cur; sel.setAttribute('data-s', cur); sel.disabled = pending;
     sel.onchange = function () { setStatus(t, sel.value); };
-    r.appendChild(sel);
+    ctl.appendChild(pr); ctl.appendChild(sel); r.appendChild(ctl);
     var del = el('button', 'del', '🗑'); del.type = 'button'; del.title = 'Delete task'; del.disabled = pending;
     del.onclick = function () {
       if (!del.classList.contains('sure')) {

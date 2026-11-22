@@ -33,6 +33,7 @@ var NEW_SOURCE = 'WhatsApp';     // Contact.Source for people added from the app
 var OPEN_STATUS = 'New';         // Task.Status for new tasks
 var DONE_STATUS = 'Done';        // Task.Status when ticked off in the app
 var TASK_STATUSES = ['New', 'In progress', 'Waiting', 'Done', 'Cancelled']; // choices in the app; Done and Cancelled count as closed
+var PRIORITIES = ['Urgent', 'High', 'Normal', 'Low']; // Task.Priority; the app lists Urgent first
 var DELETED_STATUS = 'Deleted';  // deleted tasks keep their row (for the record) but are hidden everywhere
 var STATUS_TAGS = ['Lead', 'Prospect', 'Customer', 'Inactive']; // kept in Contact.CRMTags
 
@@ -61,6 +62,7 @@ function handle_(req) {
       if (req.action === 'save') return save_(req.client || {}, req.task, me, who);
       if (req.action === 'done') return done_(req.taskId, me);
       if (req.action === 'taskStatus') return setTaskStatus_(req.taskId, req.status, me, who);
+      if (req.action === 'taskPriority') return setTaskPriority_(req.taskId, req.priority, me);
       if (req.action === 'deleteTask') return setTaskStatus_(req.taskId, DELETED_STATUS, me, who);
       if (req.action === 'events') return { ok: true, events: events_(who, req.from, req.to) };
       if (req.action === 'addEvent') return { ok: true, event: addEvent_(who, req.event || {}, '', '') };
@@ -179,7 +181,7 @@ function tasks_() {
   var t = tab_('Task'), names = userNames_();
   return t.rows.filter(function (r) { return r[t.col.TaskID] && String(r[t.col.Status]) !== DELETED_STATUS; }).map(function (r) {
     return { id: get_(t, r, 'TaskID'), title: get_(t, r, 'Title'), contactId: get_(t, r, 'ContactID'),
-      role: get_(t, r, 'ForRole'), topic: get_(t, r, 'Topic'),
+      role: get_(t, r, 'ForRole'), topic: get_(t, r, 'Topic'), priority: get_(t, r, 'Priority') || 'Normal',
       due: get_(t, r, 'DueDate'), status: get_(t, r, 'Status'), assignee: names[get_(t, r, 'AssignedTo')] || '',
       by: names[get_(t, r, 'CreatedBy')] || '', created: get_(t, r, 'CreatedAt'), completed: get_(t, r, 'CompletedAt') };
   }).slice(-1500);
@@ -276,7 +278,7 @@ function addTask_(contactId, task, me) {
   var due = task.due ? new Date(task.due.replace(' ', 'T') + (task.due.length <= 10 ? 'T00:00:00' : ':00')) : '';
   var uid = me ? me.id : '';
   append_(t, { TaskID: taskId, Title: String(task.title).slice(0, 200), Description: String(task.description || '').slice(0, 4000),
-    ContactID: contactId, AssignedTo: uid, CreatedBy: uid, DueDate: due, Priority: 'Normal', Status: OPEN_STATUS, CreatedAt: now,
+    ContactID: contactId, AssignedTo: uid, CreatedBy: uid, DueDate: due, Priority: PRIORITIES.indexOf(String(task.priority)) >= 0 ? String(task.priority) : 'Normal', Status: OPEN_STATUS, CreatedAt: now,
     ForRole: String(task.role || ''), Topic: String(task.topic || '') });
   append_(a, { ActivityID: 'A-' + hex_(12), Timestamp: now, UserID: uid, ActionType: 'Task', ContactID: contactId, TaskID: taskId,
     Description: 'Added from Task Scheduler: ' + String(task.title).slice(0, 200) + ' ' + tag + ' [task:' + taskId + ']' });
@@ -312,6 +314,19 @@ function setTaskStatus_(taskId, status, me, who) {
       ContactID: t.rows[i][t.col.ContactID], TaskID: taskId, Description: (status === DELETED_STATUS ? 'Deleted' : 'Status set to ' + status) + ' in Task Scheduler' });
     if (status === DELETED_STATUS) removeTaskEvents_(taskId, who);
     return { ok: true, status: status };
+  }
+  throw new Error('Task not found');
+}
+function setTaskPriority_(taskId, priority, me) {
+  priority = String(priority || '');
+  if (PRIORITIES.indexOf(priority) < 0) throw new Error('Unknown priority: ' + priority);
+  var t = tab_('Task');
+  for (var i = 0; i < t.rows.length; i++) {
+    if (String(t.rows[i][t.col.TaskID]) !== String(taskId)) continue;
+    setCell_(t, i, 'Priority', priority);
+    append_(tab_('Activity'), { ActivityID: 'A-' + hex_(12), Timestamp: new Date(), UserID: me ? me.id : '', ActionType: 'Task priority',
+      ContactID: t.rows[i][t.col.ContactID], TaskID: taskId, Description: 'Priority set to ' + priority + ' in Task Scheduler' });
+    return { ok: true, priority: priority };
   }
   throw new Error('Task not found');
 }
