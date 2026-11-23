@@ -426,7 +426,11 @@
       <div class="people" id="admPeople"></div>
       <label class="check"><input type="checkbox" id="admActive"> Active (uncheck to hide it from everyone)</label>
       <p class="hint" id="admType"></p>
-      <label class="check hidden" id="admToGoogleRow"><input type="checkbox" id="admToGoogle"> 🔔 Turn into a Google Calendar so phones remind you (its events are copied over)</label>
+      <div class="hidden" id="admToGoogleRow">
+        <label for="admToGoogle">🔔 Phone reminders: move this calendar to Google Calendar</label>
+        <select id="admToGoogle"></select>
+        <p class="hint">Its events are copied into the Google Calendar you pick, and new ones go straight there.</p>
+      </div>
       <button class="btn primary" id="admSave" style="margin-top:14px">Save calendar</button>
       <p class="hint" id="admNote"></p>
     </section>
