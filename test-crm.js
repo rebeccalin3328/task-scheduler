@@ -31,6 +31,7 @@ function fakeSheet(tabs, patch) {
     return (gcals[id] = cal);
   };
   mkCal('sales@group.calendar.google.com', 'Sales');
+  mkCal('personal@group.calendar.google.com', 'Rebecca personal');
   // Fake Google Drive
   const drive = { folders: {} };
   const mkFolder = name => {
@@ -172,7 +173,7 @@ const boss = b => as('rebecca@example.my', b, 'boss');
 const info = boss({ action: 'adminInfo' });
 assert.ok(info.ok, info.error);
 assert.deepEqual(info.team.map(t => t.email), ['rebecca@example.my', 'siti@example.my', 'ahmad@example.my']);
-assert.deepEqual(info.google.map(g => g.name), ['Sales']);
+assert.deepEqual(info.google.map(g => g.name), ['Sales', 'Rebecca personal']);
 assert.equal(as('siti@example.my', { action: 'adminInfo' }, 'guess').ok, false, 'wrong admin key refused');
 
 const service = boss({ action: 'saveCalendar', calendar: { name: 'Service', type: 'App', sharedWith: 'ahmad@example.my' } }).calendar;
@@ -218,6 +219,16 @@ assert.equal(conv.type, 'Google'); assert.ok(G3.gcals[conv.googleId], 'Google Ca
 assert.equal(G3.gcals[conv.googleId].evs.length, 1, 'event copied'); assert.deepEqual(G3.gcals[conv.googleId].evs[0].rem, [30]);
 boss({ action: 'saveCalendar', calendar: { id: rayCal.id, name: 'Ray', sharedWith: 'boss@x.my', active: true, toGoogle: true } });
 assert.equal(G3.gcals[conv.googleId].evs.length, 1, 'not copied twice');
+// ...or onto an existing Google Calendar you pick
+const kid = boss({ action: 'saveCalendar', calendar: { name: 'Kid', type: 'App', sharedWith: 'boss@x.my' } }).calendar;
+boss({ action: 'addEvent', event: { calendarId: kid.id, title: 'Swim', start: '2026-12-05T16:50', ref: 'k1' } });
+const gBefore = Object.keys(G3.gcals).length;
+const picked = boss({ action: 'saveCalendar', calendar: { id: kid.id, name: 'Kid', sharedWith: 'boss@x.my', active: true, toGoogle: conv.googleId } });
+assert.equal(picked.ok, false, 'a Google Calendar already used by another calendar is refused');
+const free = 'personal@group.calendar.google.com';
+const ok2 = boss({ action: 'saveCalendar', calendar: { id: kid.id, name: 'Kid', sharedWith: 'boss@x.my', active: true, toGoogle: free } }).calendar;
+assert.equal(ok2.googleId, free, 'linked to the chosen Google Calendar'); assert.equal(Object.keys(G3.gcals).length, gBefore, 'no new calendar made');
+assert.ok(G3.gcals[free].evs.some(e => e.title === 'Swim'), 'events copied into it');
 const rayEv = boss({ action: 'events', from: '2026-12-04', to: '2026-12-05' }).events.filter(e => e.calendarId === rayCal.id);
 assert.equal(rayEv.length, 1, 'shown once, from Google'); assert.ok(/^g:/.test(rayEv[0].id));
 

@@ -52,7 +52,7 @@ Team members only see, and can only add to, the calendars shared with them.
 
 ### Phone reminders
 App calendars live only in the CRM sheet, so your phone can't remind you about them. Google Calendars can:
-1. **⚙︎ Manage calendars (admin)** → tap the calendar (for example Rebecca) → tick **🔔 Turn into a Google Calendar** → **Save calendar**. A Google Calendar with the same name is made in your account and its events are copied over.
+1. **⚙︎ Manage calendars (admin)** → tap the calendar (for example Rebecca) → under **🔔 Phone reminders**, pick one of **your own Google Calendars**, or **＋ New Google Calendar** → **Save calendar**. Its events are copied into that Google Calendar, and new ones go straight there.
 2. On your phone, open the **Google Calendar** app signed in as admin@airnergy.my, and make sure that calendar is ticked in the ☰ menu.
 3. From then on every event gets a pop-up reminder: **30 minutes before**, or **8 pm the evening before** for all-day tasks. You can change `REMINDER_MINUTES` and `ALL_DAY_REMINDER_MINUTES` at the top of the script.
 

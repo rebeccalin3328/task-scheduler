@@ -566,7 +566,7 @@ function saveCalendar_(who, c) {
     if (c.color) setCell_(t, i, 'Color', String(c.color));
     setCell_(t, i, 'SharedWith', shared);
     if (c.active !== undefined) setCell_(t, i, 'IsActive', !!c.active);
-    if (c.toGoogle && calObj_(t, t.rows[i]).type === 'App') toGoogle_(t, i);
+    if (c.toGoogle && calObj_(t, t.rows[i]).type === 'App') toGoogle_(t, i, c.toGoogle === true || c.toGoogle === 'new' ? '' : String(c.toGoogle));
     var cur = calObj_(t, t.rows[i]);
     if (cur.type === 'Google' && c.name) { try { gcal_(cur).setName(String(c.name)); } catch (err) {} }
     return cur;
@@ -583,10 +583,18 @@ function saveCalendar_(who, c) {
   return calObj_(t, row);
 }
 
-/** Turn an app calendar into a new Google Calendar (so phones get reminders). Its events are copied over. */
-function toGoogle_(t, i) {
-  var c = calObj_(t, t.rows[i]), g = CalendarApp.createCalendar(c.name);
-  try { g.setColor(c.color); } catch (err) {}
+/** Move an app calendar onto Google Calendar (so phones get reminders): an existing Google Calendar of yours
+ *  (googleId) or, without one, a new one with the same name. Its events are copied over. */
+function toGoogle_(t, i, googleId) {
+  var c = calObj_(t, t.rows[i]), g;
+  if (googleId) {
+    t.rows.forEach(function (r) { if (String(r[t.col.GoogleCalendarID]) === googleId) throw new Error('That Google Calendar is already used by another calendar'); });
+    g = CalendarApp.getCalendarById(googleId);
+    if (!g) throw new Error('Google Calendar not found');
+  } else {
+    g = CalendarApp.createCalendar(c.name);
+    try { g.setColor(c.color); } catch (err) {}
+  }
   var e = tab_('Event');
   e.rows.forEach(function (r, k) {
     if (String(r[e.col.CalendarID]) !== c.id || r[e.col.GoogleEventID]) return;
