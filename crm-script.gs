@@ -805,8 +805,8 @@ function ref_(req) {
   if (!admin) throw new Error('Only the admin can use Reference');
   var a = req.action;
   if (a === 'refProcess') return refProcess_(req.chatId);
-  var lock = LockService.getScriptLock();
-  lock.waitLock(20000);
+  var lock = refLock_();
+  lock.waitLock(30000);
   try {
     if (a === 'refChats') return { ok: true, chats: refChats_(), pcSeen: PropertiesService.getScriptProperties().getProperty('refPcSeen') || '', categories: refCategoryNames_() };
     if (a === 'refLinks') return { ok: true, links: refLinks_(req.chatId), categories: refCategoryNames_() };
@@ -818,6 +818,16 @@ function ref_(req) {
     throw new Error('Unknown action');
   } finally { lock.releaseLock(); }
 }
+/** Reference's own lock: separate from the one the team's syncs use, so neither ever waits for the other. */
+function refLock_() { return LockService.getDocumentLock() || LockService.getScriptLock(); }
+/** Add many rows with one write. (One appendRow per row takes about a second each, which is far too slow for thousands.) */
+function appendMany_(t, objs) {
+  if (!objs.length) return;
+  var rows = objs.map(function (o) { return t.head.map(function (h) { return o[h] !== undefined ? o[h] : ''; }); });
+  t.sh.getRange(t.rows.length + 2, 1, rows.length, t.head.length).setValues(rows);
+  rows.forEach(function (r) { t.rows.push(r); });
+}
+var REF_CHAT_ID = /@(s\.whatsapp\.net|g\.us|lid|c\.us)$/; // people and groups; not status updates, channels or broadcast lists
 function refSeen_() { PropertiesService.getScriptProperties().setProperty('refPcSeen', fmt_(new Date(), 'yyyy-MM-dd HH:mm')); }
 function refCategoryNames_() { return REF_CATEGORIES.map(function (c) { return c[0]; }); }
 
@@ -848,8 +858,21 @@ function refUpsertChat_(t, c) {
   return i;
 }
 function refPushChats_(chats) {
-  var t = refTab_('RefChat'), n = 0;
-  chats.slice(0, 2000).forEach(function (c) { if (c && c.id) { refUpsertChat_(t, c); n++; } });
+  var t = refTab_('RefChat'), at = {}, add = [], renamed = false, n = 0;
+  t.rows.forEach(function (r, i) { at[String(r[t.col.ChatID])] = i; });
+  chats.slice(0, 20000).forEach(function (c) {
+    var id = String(c && c.id || '').trim(), name = String(c && c.name || '').trim();
+    if (!REF_CHAT_ID.test(id)) return;
+    n++;
+    if (at[id] === undefined) {
+      at[id] = -1;
+      add.push({ ChatID: id, Name: name || id.split('@')[0], Kind: c.kind || (/@g\.us$/.test(id) ? 'Group' : 'Contact') });
+    } else if (at[id] >= 0 && name && name !== String(t.rows[at[id]][t.col.Name])) {
+      t.rows[at[id]][t.col.Name] = name; renamed = true;
+    }
+  });
+  if (renamed && t.rows.length) t.sh.getRange(2, t.col.Name + 1, t.rows.length, 1).setValues(t.rows.map(function (r) { return [r[t.col.Name]]; }));
+  appendMany_(t, add);
   return n;
 }
 /** The app asks for a chat's links. reference-sync.py on your PC sees the request and sends them. */
@@ -888,15 +911,17 @@ function refPush_(chat, links, source) {
   var c = refTab_('RefChat'), t = refTab_('Reference'), ci = refUpsertChat_(c, chat), have = {}, added = 0;
   var chatId = get_(c, c.rows[ci], 'ChatID'), chatName = get_(c, c.rows[ci], 'Name');
   t.rows.forEach(function (r) { if (get_(t, r, 'ChatID') === chatId) have[get_(t, r, 'UrlKey')] = 1; });
-  links.slice(0, 3000).forEach(function (l) {
+  var add = [];
+  links.slice(0, 5000).forEach(function (l) {
     var url = refCleanUrl_(l.url), key = refKey_(url);
     if (!key || have[key]) return;
     have[key] = 1;
-    append_(t, { RefID: 'REF-' + hex_(8), ChatID: chatId, ChatName: chatName, Url: url, UrlKey: key, Domain: key.split('/')[0],
+    add.push({ RefID: 'REF-' + hex_(8), ChatID: chatId, ChatName: chatName, Url: url, UrlKey: key, Domain: key.split('/')[0],
       SharedBy: String(l.sharedBy || '').slice(0, 80), SharedAt: String(l.sharedAt || '').slice(0, 40), Message: String(l.message || '').slice(0, 300),
       Status: 'Pending', Tries: 0, AddedAt: new Date(), Source: source });
     added++;
   });
+  appendMany_(t, add);
   setCell_(c, ci, 'SyncedAt', new Date());
   var total = t.rows.filter(function (r) { return get_(t, r, 'ChatID') === chatId; }).length;
   setCell_(c, ci, 'LinkCount', total);
@@ -934,8 +959,8 @@ function refUpdate_(id, p) {
  * lock, so the rest of the app is never kept waiting. Returns how many are still waiting.
  */
 function refProcess_(chatId) {
-  var lock = LockService.getScriptLock(), picked = [], now = Date.now();
-  lock.waitLock(20000);
+  var lock = refLock_(), picked = [], now = Date.now();
+  lock.waitLock(30000);
   try {
     var t = refTab_('Reference'), order = [];
     t.rows.forEach(function (r, i) {
@@ -954,7 +979,7 @@ function refProcess_(chatId) {
     try { return { p: p, s: refSummarise_(p.url, p.message) }; } catch (err) { return { p: p, err: String(err.message || err).slice(0, 200) }; }
   });
 
-  lock.waitLock(20000);
+  lock.waitLock(30000);
   try {
     var t2 = refTab_('Reference'), left = 0;
     results.forEach(function (x) {

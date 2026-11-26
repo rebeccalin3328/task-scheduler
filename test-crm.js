@@ -7,11 +7,11 @@ function fakeSheet(tabs, patch) {
   Object.keys(tabs).forEach(n => { source[n] = { rows: tabs[n].map(r => r.slice()) }; });
   const api = sh => ({
     getDataRange: () => ({ getValues: () => sh.rows.map(r => r.slice()) }),
-    appendRow: r => { sh.rows.push(r.slice()); },
+    appendRow: r => { sh.writes = (sh.writes || 0) + 1; sh.rows.push(r.slice()); },
     setFrozenRows() {},
     getRange: (row, col, nr, nc) => ({
-      setValue: v => { sh.rows[row - 1][col - 1] = v; },
-      setValues: vals => { vals.forEach((r, i) => { sh.rows[row - 1 + i] = sh.rows[row - 1 + i] || []; r.forEach((v, j) => { sh.rows[row - 1 + i][col - 1 + j] = v; }); }); }
+      setValue: v => { sh.writes = (sh.writes || 0) + 1; sh.rows[row - 1][col - 1] = v; },
+      setValues: vals => { sh.writes = (sh.writes || 0) + 1; vals.forEach((r, i) => { sh.rows[row - 1 + i] = sh.rows[row - 1 + i] || []; r.forEach((v, j) => { sh.rows[row - 1 + i][col - 1 + j] = v; }); }); }
     })
   });
   const props = {};
@@ -61,7 +61,7 @@ function fakeSheet(tabs, patch) {
     UrlFetchApp: { fetch: (url, o) => { fetched.push(url); const pg = pages[url] || { code: 404, body: 'not found', type: 'text/html' };
       return { getResponseCode: () => pg.code || 200, getHeaders: () => ({ 'Content-Type': pg.type || 'text/html; charset=utf-8' }),
         getContentText: () => pg.body, getBlob: () => ({ getBytes: () => new Array(pg.size || 2048) }) }; } },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }), getDocumentLock: () => ({ waitLock() {}, releaseLock() {}, doc: true }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
     Utilities: {
       formatDate: (d, tz, f) => { const p = x => String(x).padStart(2, '0');
@@ -397,6 +397,22 @@ assert.equal(call({ action: 'list' }).files.length, 3);
   chats = ref({ action: 'refChats' }).chats;
   assert.equal(chats.find(c => c.id === '1203@g.us').links, 4);
   assert.equal(asTeam({ action: 'list' }).ok, true, 'the rest of the app still works');
+
+  // Thousands of chats are saved in one write, not one per chat (that took minutes and held the lock)
+  {
+    const sh = R.refSheets.RefChat;
+    const many = Array.from({ length: 3000 }, (_, i) => ({ id: '60' + (100000 + i) + '@s.whatsapp.net', name: 'Person ' + i }));
+    many.push({ id: 'status@broadcast', name: 'Status' }, { id: '123@newsletter', name: 'Channel' }, { id: '1203@g.us', name: 'Sales team (renamed)' });
+    const before = sh.rows.length, w0 = sh.writes || 0;
+    assert.equal(ref({ action: 'refPushChats', chats: many }).count, 3001, 'status and channels are left out');
+    assert.ok(sh.writes - w0 <= 2, 'one write for new chats, one for renames: ' + (sh.writes - w0));
+    assert.equal(sh.rows.length, before + 3000);
+    const ids = ref({ action: 'refChats' }).chats;
+    assert.equal(ids.find(c => c.id === '1203@g.us').name, 'Sales team (renamed)');
+    assert.ok(!ids.some(c => c.id === 'status@broadcast'));
+    assert.equal(ref({ action: 'refPushChats', chats: many }).count, 3001);
+    assert.equal(sh.rows.length, before + 3000, 'sending again adds nothing');
+  }
 }
 
 console.log('CRM sheet script: all checks passed');

@@ -395,8 +395,11 @@ class Reader:
 
 
 # ---------- main ----------
+PERSON_OR_GROUP = re.compile(r'@(?:s\.whatsapp\.net|g\.us|lid|c\.us)$')  # not status updates, channels or broadcast lists
+
+
 def send_chats(cfg, rd):
-    chats = rd.chats()
+    chats = [c for c in rd.chats() if PERSON_OR_GROUP.search(c['id'])]
     if chats:
         n = crm(cfg, {'action': 'refPushChats', 'chats': chats})['count']
         log('Sent', n, 'chat names.')
@@ -443,16 +446,26 @@ def main():
             return
         last_chats = 0
         while True:
-            try:
-                if time.time() - last_chats > CHATS_EVERY:
-                    send_chats(cfg, rd)
-                    last_chats = time.time()
-                answer_requests(cfg, rd)
-            except Exception as e:
-                log('Problem:', str(e)[:300])
-                if rd.m and rd.m.p.poll() is not None:  # MCP stopped: start again
-                    rd.close()
-                    rd = Reader(cfg)
+            # Chats you asked for come first; the chat list is a separate step, so a problem with one never blocks the other.
+            for step in ('requests', 'chats'):
+                if step == 'chats' and time.time() - last_chats < CHATS_EVERY:
+                    continue
+                try:
+                    if step == 'requests':
+                        answer_requests(cfg, rd)
+                    else:
+                        send_chats(cfg, rd)
+                        last_chats = time.time()
+                except Exception as e:
+                    msg = str(e)[:300]
+                    if 'Lock timeout' in msg:
+                        msg += ' (the sheet was busy; trying again in a minute)'
+                    log('Problem', '(' + step + '):', msg)
+                    if step == 'chats':
+                        last_chats = time.time() - CHATS_EVERY + 5 * 60  # try the chat list again in 5 minutes
+                    if rd.m and rd.m.p.poll() is not None:  # MCP stopped: start again
+                        rd.close()
+                        rd = Reader(cfg)
             if args[:1] == ['--once']:
                 break
             time.sleep(CHECK_EVERY)
