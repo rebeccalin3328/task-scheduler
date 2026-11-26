@@ -1,0 +1,223 @@
+// Reference (admin only): pick a WhatsApp chat, and every link shared in it is opened, summarised and put in a category.
+// Links come from your PC (reference-sync.py reads the chat through the read-only WhatsApp MCP), or from a chat you paste
+// or open here (WhatsApp > chat > ⋮ > More > Export chat > Without media). Only works with the admin key on this phone.
+// Nothing here sends WhatsApp messages.
+(function () {
+  // ---- Chat text → links (also used by test-ref.js) ----
+  // Message headers WhatsApp uses:
+  //   export (Android): 26/11/2026, 13:47 - Ali: text      11/26/26, 1:47 PM - Ali: text
+  //   export (iPhone):  [26/11/2026, 13:47:01] Ali: text
+  //   copied messages:  [13:47, 26/11/2026] Ali: text
+  var HEAD = [
+    /^‎?\[?(\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{2,4}),?\s+(\d{1,2}[:.]\d{2}(?:[:.]\d{2})?(?:\s?[AaPp]\.?\s?[Mm]\.?)?)\]?\s*(?:[-–]\s*)?([^:\n]{1,60}?):\s?(.*)$/,
+    /^‎?\[(\d{1,2}[:.]\d{2}(?:\s?[AaPp]\.?\s?[Mm]\.?)?),\s*(\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{2,4})\]\s*([^:\n]{1,60}?):\s?(.*)$/
+  ];
+  var URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+
+  function cleanUrl(url) {
+    var u = String(url || '').trim().replace(/^<+/, ''), n = function (c) { return u.split(c).length - 1; };
+    while (u) {
+      var last = u.slice(-1);
+      if (/[\]}>.,;:!?'"*_~]/.test(last) || last === ')' && n(')') > n('(')) u = u.slice(0, -1); else break;
+    }
+    return /^www\./i.test(u) ? 'https://' + u : u;
+  }
+  function parseChat(text) {
+    var msgs = [], cur = null;
+    String(text || '').replace(/\r/g, '').split('\n').forEach(function (line) {
+      var m = HEAD[0].exec(line), when;
+      if (m) when = m[1] + ' ' + m[2];
+      else if ((m = HEAD[1].exec(line))) when = m[2] + ' ' + m[1];
+      if (m) { cur = { by: m[3].replace(/^‎/, '').trim(), at: when, text: m[4] }; msgs.push(cur); }
+      else if (cur) cur.text += '\n' + line;
+      else { cur = { by: '', at: '', text: line }; msgs.push(cur); }
+    });
+    var out = [], seen = {};
+    msgs.forEach(function (msg) {
+      (msg.text.match(URL_RE) || []).forEach(function (raw) {
+        var url = cleanUrl(raw);
+        if (!/^https?:\/\/[^\/\s]+\.[^\/\s]+/i.test(url) || seen[url]) return;
+        seen[url] = 1;
+        out.push({ url: url, sharedBy: msg.by, sharedAt: msg.at, message: msg.text.trim().slice(0, 300) });
+      });
+    });
+    return out;
+  }
+  window.REFPARSE = { parseChat: parseChat, cleanUrl: cleanUrl };
+  if (typeof document === 'undefined' || !document.getElementById('refView')) return;
+
+  // ---- Screen ----
+  var $ = function (id) { return document.getElementById(id); };
+  var C = window.CRM;
+  var chats = [], links = [], cats = [], chatId = '', filter = '', busy = false, waitTimer = null;
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function admin() { return !!(C && C.state().isAdmin); }
+  function note(t) { $('refNote').textContent = t || ''; }
+  function chatName(id) { var c = chats.filter(function (x) { return x.id === id; })[0]; return c ? c.name : ''; }
+
+  function changed() {
+    $('tabRef').classList.toggle('hidden', !admin());
+    if (!admin() && !$('refView').classList.contains('hidden')) C.show('task');
+  }
+  $('tabRef').onclick = function () { C.show('ref'); loadChats(); };
+
+  function loadChats() {
+    return C.api({ action: 'refChats' }).then(function (j) {
+      chats = j.chats || []; cats = j.categories || cats;
+      chats.sort(function (a, b) { return (b.links - a.links) || a.name.localeCompare(b.name); });
+      var dl = $('refChatList'); dl.innerHTML = '';
+      chats.forEach(function (c) { var o = el('option'); o.value = c.name; dl.appendChild(o); });
+      $('refPc').textContent = j.pcSeen ? 'Your PC last checked in ' + j.pcSeen + '.' : 'Your PC has not checked in yet. See REFERENCE-SETUP.md to start it.';
+      drawRecent();
+      loadLinks();
+    }, function (err) { note(err.kind === 'rejected' ? err.message : 'Could not load: ' + err.message); });
+  }
+  function drawRecent() {
+    var box = $('refRecent'); box.innerHTML = '';
+    var all = el('button', chatId ? '' : 'on', 'All chats'); all.onclick = function () { pick(''); }; box.appendChild(all);
+    chats.filter(function (c) { return c.links || c.id === chatId; }).slice(0, 30).forEach(function (c) {
+      var b = el('button', c.id === chatId ? 'on' : '', (c.kind === 'Group' ? '👥 ' : '👤 ') + c.name + ' · ' + c.links);
+      b.onclick = function () { pick(c.id); };
+      box.appendChild(b);
+    });
+  }
+  function pick(id) {
+    chatId = id; filter = '';
+    $('refFind').value = id ? chatName(id) : '';
+    $('refGet').disabled = !id || /^paste:/.test(id);
+    drawRecent(); loadLinks();
+  }
+  $('refFind').addEventListener('change', function () {
+    var v = $('refFind').value.trim().toLowerCase();
+    var c = chats.filter(function (x) { return x.name.toLowerCase() === v; })[0];
+    if (c) pick(c.id);
+    else if (!v) pick('');
+    else note('No chat called "' + $('refFind').value + '" yet. Your PC sends the chat list when it runs. You can also paste the chat below.');
+  });
+
+  // Ask the PC for this chat's links, then wait for them.
+  $('refGet').onclick = function () {
+    if (!chatId) return;
+    note('Asking your PC for the links in ' + chatName(chatId) + '…');
+    C.api({ action: 'refRequest', chatId: chatId }).then(function () { waitForPc(chatId, Date.now()); },
+      function (err) { note('Not sent: ' + err.message); });
+  };
+  function waitForPc(id, since) {
+    clearTimeout(waitTimer);
+    var before = (chats.filter(function (c) { return c.id === id; })[0] || {}).syncedAt;
+    waitTimer = setTimeout(function check() {
+      if ($('refView').classList.contains('hidden')) return;
+      C.api({ action: 'refChats' }).then(function (j) {
+        chats = j.chats || chats;
+        var c = chats.filter(function (x) { return x.id === id; })[0] || {};
+        if (c.syncedAt && c.syncedAt !== before) { note('Got ' + c.links + ' links from your PC.'); drawRecent(); loadLinks(); return; }
+        if (Date.now() - since > 5 * 60000) { note('Your PC has not answered in 5 minutes. Is it on, with reference-sync running? You can also paste the chat below.'); return; }
+        note('Waiting for your PC… (it checks every minute)');
+        waitTimer = setTimeout(check, 10000);
+      }, function () { waitTimer = setTimeout(check, 15000); });
+    }, 4000);
+  }
+
+  // Paste a chat, or open an exported .txt
+  $('refFile').onchange = function () {
+    var f = $('refFile').files[0];
+    if (!f) return;
+    if (/zip/i.test(f.type) || /\.zip$/i.test(f.name)) { note('That is a .zip. Open it in Files first, then pick the .txt inside.'); return; }
+    var r = new FileReader();
+    r.onload = function () {
+      $('refPaste').value = String(r.result || '');
+      var m = f.name.match(/WhatsApp Chat (?:with|-|dengan)?\s*(.+?)\.txt$/i);
+      if (m && !$('refPasteName').value) $('refPasteName').value = m[1];
+      $('refPasteGo').click();
+    };
+    r.readAsText(f);
+  };
+  $('refPasteGo').onclick = function () {
+    var found = parseChat($('refPaste').value);
+    if (!found.length) { note('No links found in that text.'); return; }
+    var name = $('refPasteName').value.trim(), id = chatId;
+    if (!id) {
+      if (!name) { note('Type the chat name (or pick a chat above), so the links are filed under it.'); $('refPasteName').focus(); return; }
+      var same = chats.filter(function (c) { return c.name.toLowerCase() === name.toLowerCase(); })[0];
+      id = same ? same.id : 'paste:' + name.toLowerCase();
+    }
+    note('Sending ' + found.length + ' links…');
+    C.api({ action: 'refPush', source: 'app', chat: { id: id, name: name || chatName(id), kind: 'Pasted' }, links: found }).then(function (j) {
+      $('refPaste').value = ''; $('refFile').value = '';
+      note(j.added + ' new links, ' + (found.length - j.added) + ' already there.');
+      return loadChats().then(function () { pick(j.chatId); });
+    }, function (err) { note('Not sent: ' + err.message); });
+  };
+
+  function loadLinks() {
+    return C.api({ action: 'refLinks', chatId: chatId }).then(function (j) {
+      links = j.links || []; cats = j.categories || cats;
+      render();
+      if (links.some(waiting)) work();
+    }, function (err) { note('Could not load links: ' + err.message); });
+  }
+  function waiting(l) { return l.status === 'Pending' || l.status === 'Working'; }
+  // Summarise waiting links a few at a time while this screen is open.
+  function work() {
+    if (busy) return;
+    busy = true;
+    (function step() {
+      if ($('refView').classList.contains('hidden')) { busy = false; return; }
+      C.api({ action: 'refProcess', chatId: chatId }).then(function (j) {
+        return C.api({ action: 'refLinks', chatId: chatId }).then(function (k) {
+          links = k.links || links; render();
+          if (j.left && j.done) setTimeout(step, 300); else busy = false;
+        });
+      }, function (err) { busy = false; note('Summaries paused: ' + err.message); });
+    })();
+  }
+
+  function render() {
+    var q = $('refSearch').value.trim().toLowerCase();
+    var shown = links.filter(function (l) {
+      return (!filter || l.category === filter) && (!q || (l.title + ' ' + l.summary + ' ' + l.url + ' ' + l.by + ' ' + l.chat).toLowerCase().indexOf(q) >= 0);
+    });
+    var count = {};
+    links.forEach(function (l) { var k = l.category || 'Waiting'; count[k] = (count[k] || 0) + 1; });
+    var box = $('refCats'); box.innerHTML = '';
+    var all = el('button', filter ? '' : 'on', 'All · ' + links.length); all.onclick = function () { filter = ''; render(); }; box.appendChild(all);
+    cats.filter(function (c) { return count[c]; }).forEach(function (c) {
+      var b = el('button', filter === c ? 'on' : '', c + ' · ' + count[c]); b.onclick = function () { filter = filter === c ? '' : c; render(); }; box.appendChild(b);
+    });
+    var left = links.filter(waiting).length;
+    $('refTitle').textContent = (chatId ? chatName(chatId) : 'All chats') + (left ? ' · summarising ' + left + '…' : '');
+    var list = $('refList'); list.innerHTML = '';
+    if (!shown.length) list.appendChild(el('div', 'empty', links.length ? 'No links match.' : chatId ? 'No links yet. Tap "Get links" or paste the chat below.' : 'Pick a chat to start.'));
+    shown.slice(0, 300).forEach(function (l) { list.appendChild(card(l)); });
+  }
+  $('refSearch').addEventListener('input', render);
+
+  function card(l) {
+    var d = el('div', 'ref');
+    var a = el('a', 'rt', l.title || l.domain || l.url); a.href = l.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    d.appendChild(a);
+    var sub = el('div', 'rs', [l.domain, l.by && 'from ' + l.by, l.at, !chatId && l.chat].filter(Boolean).join(' · '));
+    d.appendChild(sub);
+    if (waiting(l)) d.appendChild(el('p', 'rsum muted', '⏳ Reading the page…'));
+    else if (l.status === 'Failed') {
+      d.appendChild(el('p', 'rsum muted', '⚠️ Could not open it: ' + (l.error || 'unknown error')));
+      var retry = el('button', 'linkbtn', 'Try again');
+      retry.onclick = function () { C.api({ action: 'refUpdate', id: l.id, retry: true }).then(loadLinks); };
+      d.appendChild(retry);
+    } else d.appendChild(el('p', 'rsum', l.summary));
+    var sel = el('select', 'rcat');
+    cats.forEach(function (c) { var o = el('option', null, c); o.value = c; sel.appendChild(o); });
+    if (!l.category) { var o = el('option', null, 'Category…'); o.value = ''; sel.insertBefore(o, sel.firstChild); }
+    sel.value = l.category || '';
+    sel.title = l.categoryBy === 'You' ? 'Set by you' : 'Set automatically. Change it if it is wrong.';
+    sel.onchange = function () {
+      C.api({ action: 'refUpdate', id: l.id, category: sel.value }).then(function (j) { l.category = j.link.category; l.categoryBy = 'You'; render(); },
+        function (err) { note('Not changed: ' + err.message); });
+    };
+    d.appendChild(sel);
+    return d;
+  }
+
+  window.REF = { changed: changed, reload: loadChats };
+  changed();
+})();
