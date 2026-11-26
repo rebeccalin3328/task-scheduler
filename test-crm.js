@@ -15,6 +15,9 @@ function fakeSheet(tabs, patch) {
     })
   });
   const props = {};
+  // Private Reference spreadsheet, and fake web pages for UrlFetchApp
+  const refSheets = {}, pages = {}, fetched = [];
+  const refSS = { getId: () => 'ref-sheet', getSheetByName: nm => refSheets[nm] && api(refSheets[nm]), insertSheet: nm => api(refSheets[nm] = { rows: [] }) };
   // Fake Google Calendar
   const gcals = {};
   const mkCal = (id, name) => {
@@ -46,7 +49,8 @@ function fakeSheet(tabs, patch) {
   let n = 0;
   const ctx = {
     SpreadsheetApp: {
-      openById: () => ({ getSheetByName: nm => source[nm] && api(source[nm]) }),
+      openById: id => id === 'ref-sheet' ? refSS : ({ getSheetByName: nm => source[nm] && api(source[nm]) }),
+      create: name => { refSS.name = name; return refSS; },
       getActiveSpreadsheet: () => ({ getSheetByName: nm => sheets[nm] && api(sheets[nm]), insertSheet: nm => api(sheets[nm] = { rows: [] }) })
     },
     DriveApp: { createFolder: n => { const f = mkFolder(n); folderApi[f.getId()] = f; return f; }, getFolderById: id => { if (!folderApi[id]) throw new Error('gone'); return folderApi[id]; },
@@ -54,6 +58,9 @@ function fakeSheet(tabs, patch) {
     CalendarApp: { getCalendarById: id => gcals[id] || null, getAllCalendars: () => Object.values(gcals),
       createCalendar: name => mkCal('new' + Object.keys(gcals).length + '@group.calendar.google.com', name) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
+    UrlFetchApp: { fetch: (url, o) => { fetched.push(url); const pg = pages[url] || { code: 404, body: 'not found', type: 'text/html' };
+      return { getResponseCode: () => pg.code || 200, getHeaders: () => ({ 'Content-Type': pg.type || 'text/html; charset=utf-8' }),
+        getContentText: () => pg.body, getBlob: () => ({ getBytes: () => new Array(pg.size || 2048) }) }; } },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
     Utilities: {
@@ -69,7 +76,7 @@ function fakeSheet(tabs, patch) {
   vm.createContext(ctx);
   const code = fs.readFileSync(__dirname + '/crm-script.gs', 'utf8');
   vm.runInContext(patch ? patch(code) : code, ctx);
-  return { sheets, source, props, gcals, drive, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
+  return { sheets, source, props, gcals, drive, refSheets, refSS, pages, fetched, ctx, call: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text) };
 }
 
 const tabs = {
@@ -321,5 +328,75 @@ up = call({ action: 'upload', file: { name: 'IMG_2031.JPG', mime: 'image/jpeg', 
 assert.equal(up.file.name, '2026-11-30_Site-photos-roof_BETA-ENGINEERING.JPG');
 assert.equal(folder.files.length, 3);
 assert.equal(call({ action: 'list' }).files.length, 3);
+
+// ---------- Reference (admin only, private sheet) ----------
+{
+  const R = fakeSheet(JSON.parse(masterBefore), src => src.replace("var ADMIN_KEY = 'change-me-too';", "var ADMIN_KEY = 'boss';"));
+  const sheetBefore = JSON.stringify(R.source);
+  const asTeam = b => R.call(Object.assign({ key, me: 'siti@example.my' }, b));
+  const ref = b => R.call(Object.assign({ key, me: 'rebecca@example.my', adminKey: 'boss' }, b));
+  assert.equal(asTeam({ action: 'refChats' }).ok, false, 'no admin key: Reference refused');
+  assert.equal(asTeam({ action: 'refChats', adminKey: 'change-me-too' }).ok, false, 'default admin key never works');
+  assert.equal(R.call({ key: 'nope', adminKey: 'boss', action: 'refChats' }).error, 'Wrong team key');
+
+  // The PC script sends the chat list; the app asks for one chat; the PC sees the request
+  assert.equal(ref({ action: 'refPushChats', chats: [{ id: '60123@s.whatsapp.net', name: 'Ali Supplier' }, { id: '1203@g.us', name: 'Sales team' }] }).count, 2);
+  let chats = ref({ action: 'refChats' });
+  assert.deepEqual(chats.chats.map(c => [c.name, c.kind]), [['Ali Supplier', 'Contact'], ['Sales team', 'Group']]);
+  assert.ok(chats.pcSeen, 'remembers when the PC last checked in');
+  assert.deepEqual(ref({ action: 'refPending' }).chats, [], 'nothing asked for yet');
+  ref({ action: 'refRequest', chatId: '1203@g.us' });
+  assert.deepEqual(ref({ action: 'refPending' }).chats.map(c => c.id), ['1203@g.us']);
+
+  R.pages['https://news.example.com/aircond-tax'] = { body: '<html><head><title>Ignored</title><meta property="og:title" content="New tax guideline for building owners">' +
+    '<meta name="description" content="The government will add a tax on inefficient air conditioners from 2027."></head><body><script>var x=1</script>' +
+    '<p>Short.</p><p>Suppliers say prices of non-inverter units may rise by up to 10 percent next year.</p></body></html>' };
+  R.pages['https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent('https://youtu.be/abc123?si=track')] = { body: JSON.stringify({ title: 'How to clean a split unit', author_name: 'CoolFix' }) };
+  R.pages['https://youtu.be/abc123?si=track'] = { body: '<html><head><meta name="description" content="Step by step cleaning of a wall-mounted air conditioner."></head></html>' };
+  R.pages['https://shopee.com.my/item/9'] = { body: '<title>Filter set | Shopee Malaysia</title><p>Buy now. Price RM 25.00 for a pack of 3 replacement filters.</p>' };
+
+  const push = ref({ action: 'refPush', source: 'pc', chat: { id: '1203@g.us', name: 'Sales team' }, links: [
+    { url: 'https://news.example.com/aircond-tax).', sharedBy: 'Ali', sharedAt: '2026-11-20 09:15', message: 'Read this (https://news.example.com/aircond-tax).' },
+    { url: 'https://news.example.com/aircond-tax?utm_source=wa', sharedBy: 'Siti' },
+    { url: 'https://youtu.be/abc123?si=track', sharedBy: 'Ahmad' },
+    { url: 'https://shopee.com.my/item/9' },
+    { url: 'https://gone.example.com/x' },
+    { url: 'not a link' }] });
+  assert.equal(push.added, 4, 'same link with tracking tags or trailing punctuation is added once; non-links skipped');
+  assert.equal(ref({ action: 'refPush', chat: { id: '1203@g.us' }, links: [{ url: 'https://shopee.com.my/item/9/' }] }).added, 0, 'sending again adds nothing');
+  assert.deepEqual(ref({ action: 'refPending' }).chats, [], 'request answered');
+  assert.equal(R.refSS.name, 'Task Scheduler Reference (private)');
+  assert.ok(!R.sheets.Reference && !R.sheets.RefChat, 'nothing about chats is written to the team CRM sheet');
+  assert.equal(JSON.stringify(R.source), sheetBefore, 'airnergy_crm_backend untouched');
+
+  let p = ref({ action: 'refProcess', chatId: '1203@g.us' });
+  assert.equal(p.done, 3); assert.equal(p.left, 1);
+  p = ref({ action: 'refProcess' });
+  assert.equal(p.left, 1, 'a page that fails is tried once more');
+  p = ref({ action: 'refProcess' });
+  assert.equal(p.left, 0);
+  const links = ref({ action: 'refLinks', chatId: '1203@g.us' }).links;
+  const by = u => links.find(l => l.url === u);
+  const news = by('https://news.example.com/aircond-tax');
+  assert.equal(news.title, 'New tax guideline for building owners');
+  assert.ok(/inefficient air conditioners/.test(news.summary) && /non-inverter/.test(news.summary), 'description topped up with the first real paragraph: ' + news.summary);
+  assert.equal(news.category, 'Government & rules');
+  assert.equal(news.by, 'Ali'); assert.equal(news.status, 'Done');
+  const vid = by('https://youtu.be/abc123?si=track');
+  assert.equal(vid.title, 'How to clean a split unit'); assert.equal(vid.category, 'Video');
+  assert.ok(/^YouTube video by CoolFix\./.test(vid.summary), vid.summary);
+  assert.equal(by('https://shopee.com.my/item/9').category, 'Shopping & suppliers');
+  const gone = by('https://gone.example.com/x');
+  assert.equal(gone.status, 'Failed'); assert.ok(/404/.test(gone.error));
+
+  // Fix a category by hand; a retry keeps it
+  assert.equal(ref({ action: 'refUpdate', id: news.id, category: 'News' }).link.category, 'News');
+  assert.equal(ref({ action: 'refUpdate', id: news.id, category: 'Nonsense' }).ok, false);
+  ref({ action: 'refUpdate', id: news.id, retry: true }); ref({ action: 'refProcess' });
+  assert.equal(ref({ action: 'refLinks' }).links.find(l => l.id === news.id).category, 'News', 'your own category is kept');
+  chats = ref({ action: 'refChats' }).chats;
+  assert.equal(chats.find(c => c.id === '1203@g.us').links, 4);
+  assert.equal(asTeam({ action: 'list' }).ok, true, 'the rest of the app still works');
+}
 
 console.log('CRM sheet script: all checks passed');

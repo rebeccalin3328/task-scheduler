@@ -137,6 +137,7 @@
       if (window.PICKS) PICKS.refresh();
       fillCalendars();
       if (window.CAL) CAL.changed();
+      if (window.REF) REF.changed();
       queue.forEach(function (q) { if (q.action === 'save') applyLocal(q.client, q.task); });
       keep('crmCache2', cache);
       fillTeam();
@@ -245,10 +246,10 @@
   ['company', 'status', 'followUp'].forEach(function (id) { $(id).addEventListener('change', matchForm); });
 
   // ---- Views ----
-  var VIEWS = { task: 'tabTask', cal: 'tabCal', ev: 'tabCal', adm: 'tabCal', clients: 'tabClients', detail: 'tabClients' };
+  var VIEWS = { task: 'tabTask', cal: 'tabCal', ev: 'tabCal', adm: 'tabCal', clients: 'tabClients', detail: 'tabClients', ref: 'tabRef' };
   function show(view) {
     Object.keys(VIEWS).forEach(function (v) { $(v === 'task' ? 'taskView' : v + 'View').classList.toggle('hidden', v !== view); });
-    ['tabTask', 'tabCal', 'tabClients'].forEach(function (t) { $(t).classList.toggle('on', VIEWS[view] === t); });
+    ['tabTask', 'tabCal', 'tabClients', 'tabRef'].forEach(function (t) { $(t).classList.toggle('on', VIEWS[view] === t); });
     if (view !== 'detail') current = null;
     window.scrollTo(0, 0);
   }

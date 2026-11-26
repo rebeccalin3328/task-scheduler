@@ -15,6 +15,9 @@
  * (events read and written in Google Calendar). Each is shared with Everyone or with chosen work emails.
  * Only someone with ADMIN_KEY can create, link or share calendars.
  *
+ * Reference (admin only): links shared in WhatsApp chats, summarised and sorted, kept in a separate private sheet.
+ *   See REFERENCE-SETUP.md.
+ *
  * Setup: see CRM-SETUP.md. In short: in the CRM sheet, Extensions > Apps Script, paste this file, set TEAM_KEY,
  * then Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).
  */
@@ -48,6 +51,7 @@ function out_(o) { return ContentService.createTextOutput(JSON.stringify(o)).set
 function handle_(req) {
   try {
     if (String(req.key || '') !== TEAM_KEY) throw new Error('Wrong team key');
+    if (/^ref[A-Z]/.test(String(req.action || ''))) return ref_(req); // Reference: admin only, private sheet
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
@@ -748,4 +752,340 @@ function fileObj_(t, r) {
 function files_() {
   var t = tab_('File');
   return t.rows.filter(function (r) { return r[t.col.FileID]; }).map(function (r) { return fileObj_(t, r); }).slice(-500);
+}
+
+// ---------- Reference (admin only) ----------
+// Links shared in WhatsApp chats, each opened, summarised and put in a category. Only someone with ADMIN_KEY can use it.
+// Kept in a separate, private spreadsheet ("Task Scheduler Reference (private)", made in your Drive the first time),
+// so team members who can open the CRM sheet never see your chats. Links arrive two ways:
+// - reference-sync.py on your PC reads the chat you picked through the read-only WhatsApp MCP and sends its links here.
+// - In the app you paste a chat (or open a WhatsApp "Export chat" .txt) and the phone sends the links.
+// Nothing here ever sends a WhatsApp message.
+var REF_SHEET_NAME = 'Task Scheduler Reference (private)';
+var REF_BATCH = 3;              // links opened and summarised per request (Apps Script stops a request after 6 minutes)
+var REF_MAX_HTML = 500000;      // characters of a page that are read
+// Optional, free: a Gemini API key (aistudio.google.com, free tier) in Project Settings > Script properties as
+// GEMINI_API_KEY gives written summaries. Without it, summaries come from the page's own description and first lines.
+var REF_AI_MODEL = 'gemini-2.5-flash';
+// Categories, checked in this order. Each: [name, website patterns, words in the title or text].
+var REF_CATEGORIES = [
+  ['Video', ['youtube.com', 'youtu.be', 'tiktok.com', 'vimeo.com', 'fb.watch', 'facebook.com/watch', 'facebook.com/reel', 'instagram.com/reel', 'bilibili.com', 'douyin.com'], ['video', 'watch', 'episode', 'vlog', '视频']],
+  ['Social post', ['facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'linkedin.com', 'threads.net', 'xiaohongshu.com', 'xhslink.com', 'weibo.com'], ['post', 'posted']],
+  ['Maps & places', ['maps.google', 'goo.gl/maps', 'maps.app.goo.gl', 'waze.com', 'google.com/maps'], ['directions', 'location', 'lokasi', '地址']],
+  ['Documents & files', ['docs.google.com', 'drive.google.com', 'sheets.google.com', 'dropbox.com', 'onedrive.live.com', '1drv.ms', 'sharepoint.com', 'canva.com', 'wetransfer.com', '.pdf'], ['pdf', 'document', 'spreadsheet', 'brochure', 'catalogue', 'catalog']],
+  ['Meetings & events', ['eventbrite', 'zoom.us', 'meet.google.com', 'teams.microsoft.com', 'calendly.com', 'lu.ma'], ['webinar', 'seminar', 'expo', 'exhibition', 'conference', 'workshop', 'register now', 'pameran', '研讨会', '展览']],
+  ['Government & rules', ['.gov.my', '.gov', 'hasil.gov.my', 'ssm.com.my', 'kwsp.gov.my', 'perkeso.gov.my', 'st.gov.my', 'seda.gov.my', 'tnb.com.my', 'jkr.gov.my', 'mida.gov.my', 'mof.gov.my'], ['regulation', 'act ', 'akta', 'guideline', 'garis panduan', 'permit', 'licence', 'license', 'tax', 'cukai', 'compliance', 'gazette', 'warta', '法令', '税']],
+  ['Shopping & suppliers', ['shopee.', 'lazada.', 'amazon.', 'aliexpress.', 'alibaba.', '1688.com', 'taobao.', 'tmall.', 'carousell.', 'mudah.my', 'temu.com', 'made-in-china.com'], ['price', 'buy now', 'add to cart', 'harga', 'beli', 'supplier', 'wholesale', 'quotation', 'sebut harga', '价格', '购买', '供应商']],
+  ['Products & technical', [], ['datasheet', 'specification', 'spec sheet', 'btu', 'hvac', 'aircond', 'air-cond', 'air conditioner', 'inverter', 'compressor', 'chiller', 'ventilation', 'solar', 'pv ', 'energy efficiency', 'kwh', 'installation', 'model no', 'manual', '冷气', '空调', '规格']],
+  ['News', ['thestar.com.my', 'nst.com.my', 'malaymail.com', 'freemalaysiatoday.com', 'bernama.com', 'malaysiakini.com', 'theedgemalaysia.com', 'sinchew.com.my', 'chinapress.com.my', 'orientaldaily.com.my', 'utusan.com.my', 'hmetro.com.my', 'bharian.com.my', 'says.com', 'bbc.', 'cnn.com', 'reuters.com', 'channelnewsasia.com', 'straitstimes.com', 'scmp.com'], ['news', 'berita', 'breaking', 'reported', 'said on', '新闻', '报道']],
+  ['Money & business', ['maybank', 'cimb', 'publicbank', 'rhbgroup', 'hongleong', 'bursamalaysia', 'investing.com', 'bloomberg.com'], ['loan', 'pinjaman', 'grant', 'geran', 'financing', 'invest', 'pelaburan', 'interest rate', 'stock', 'saham', 'revenue', 'profit', '贷款', '投资']],
+  ['Learning & how-to', ['wikipedia.org', 'medium.com', 'udemy.com', 'coursera.org', 'khanacademy.org', 'stackoverflow.com', 'github.com'], ['how to', 'tutorial', 'guide', 'tips', 'learn', 'course', 'cara ', 'panduan', '教程', '如何']],
+  ['Other', [], []]
+];
+
+function refSheet_() {
+  var props = PropertiesService.getScriptProperties(), id = props.getProperty('refSheet'), ss = null;
+  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; } }
+  if (!ss) { ss = SpreadsheetApp.create(REF_SHEET_NAME); props.setProperty('refSheet', ss.getId()); }
+  return ss;
+}
+var REF_HEADERS = {
+  RefChat: ['ChatID', 'Name', 'Kind', 'RequestedAt', 'SyncedAt', 'LinkCount', 'Note'],
+  Reference: ['RefID', 'ChatID', 'ChatName', 'Url', 'UrlKey', 'Domain', 'Title', 'Summary', 'Category', 'CategoryBy', 'SharedBy', 'SharedAt',
+    'Message', 'Status', 'Error', 'Tries', 'FetchedAt', 'AddedAt', 'Source']
+};
+function refTab_(name) {
+  var ss = refSheet_(), sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); sh.appendRow(REF_HEADERS[name]); sh.setFrozenRows(1); }
+  return read_(sh);
+}
+
+function ref_(req) {
+  var admin = !!req.adminKey && String(req.adminKey) === ADMIN_KEY && ADMIN_KEY !== 'change-me-too';
+  if (!admin) throw new Error('Only the admin can use Reference');
+  var a = req.action;
+  if (a === 'refProcess') return refProcess_(req.chatId);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    if (a === 'refChats') return { ok: true, chats: refChats_(), pcSeen: PropertiesService.getScriptProperties().getProperty('refPcSeen') || '', categories: refCategoryNames_() };
+    if (a === 'refLinks') return { ok: true, links: refLinks_(req.chatId), categories: refCategoryNames_() };
+    if (a === 'refRequest') return { ok: true, chat: refRequest_(req.chatId, req.name) };
+    if (a === 'refPushChats') { refSeen_(); return { ok: true, count: refPushChats_(req.chats || []) }; }
+    if (a === 'refPending') { refSeen_(); return { ok: true, chats: refPending_() }; }
+    if (a === 'refPush') { if (req.source === 'pc') refSeen_(); return refPush_(req.chat || {}, req.links || [], req.source || 'app'); }
+    if (a === 'refUpdate') return { ok: true, link: refUpdate_(req.id, req) };
+    throw new Error('Unknown action');
+  } finally { lock.releaseLock(); }
+}
+function refSeen_() { PropertiesService.getScriptProperties().setProperty('refPcSeen', fmt_(new Date(), 'yyyy-MM-dd HH:mm')); }
+function refCategoryNames_() { return REF_CATEGORIES.map(function (c) { return c[0]; }); }
+
+function refChats_() {
+  var t = refTab_('RefChat'), r = refTab_('Reference'), count = {}, pending = {};
+  r.rows.forEach(function (x) {
+    var id = get_(r, x, 'ChatID'), st = get_(r, x, 'Status');
+    count[id] = (count[id] || 0) + 1;
+    if (st === 'Pending' || st === 'Working') pending[id] = (pending[id] || 0) + 1;
+  });
+  return t.rows.filter(function (x) { return x[t.col.ChatID]; }).map(function (x) {
+    var id = get_(t, x, 'ChatID');
+    return { id: id, name: get_(t, x, 'Name'), kind: get_(t, x, 'Kind'), requestedAt: get_(t, x, 'RequestedAt'), syncedAt: get_(t, x, 'SyncedAt'),
+      links: count[id] || 0, pending: pending[id] || 0 };
+  });
+}
+function refChatRow_(t, id) {
+  for (var i = 0; i < t.rows.length; i++) if (get_(t, t.rows[i], 'ChatID') === id) return i;
+  return -1;
+}
+/** Add or rename a chat; returns its row index. */
+function refUpsertChat_(t, c) {
+  var id = String(c.id || '').trim(), name = String(c.name || '').trim();
+  if (!id) throw new Error('No chat');
+  var i = refChatRow_(t, id);
+  if (i < 0) { append_(t, { ChatID: id, Name: name || id, Kind: c.kind || (/@g\.us$/.test(id) ? 'Group' : 'Contact') }); return t.rows.length - 1; }
+  if (name && name !== get_(t, t.rows[i], 'Name')) setCell_(t, i, 'Name', name);
+  return i;
+}
+function refPushChats_(chats) {
+  var t = refTab_('RefChat'), n = 0;
+  chats.slice(0, 2000).forEach(function (c) { if (c && c.id) { refUpsertChat_(t, c); n++; } });
+  return n;
+}
+/** The app asks for a chat's links. reference-sync.py on your PC sees the request and sends them. */
+function refRequest_(id, name) {
+  var t = refTab_('RefChat'), i = refUpsertChat_(t, { id: id, name: name });
+  setCell_(t, i, 'RequestedAt', new Date());
+  return refChats_().filter(function (c) { return c.id === String(id).trim(); })[0];
+}
+function refMs_(v) { if (v instanceof Date) return v.getTime(); var d = v ? new Date(String(v).replace(' ', 'T')) : null; return d && !isNaN(d) ? d.getTime() : 0; }
+function refPending_() {
+  var t = refTab_('RefChat');
+  return t.rows.filter(function (x) {
+    var req = refMs_(x[t.col.RequestedAt]), syn = refMs_(x[t.col.SyncedAt]);
+    return req && req > syn;
+  }).map(function (x) { return { id: get_(t, x, 'ChatID'), name: get_(t, x, 'Name'), since: get_(t, x, 'SyncedAt') }; });
+}
+
+/** Same link, written differently: no tracking tags, no #part, lower-case site, no trailing slash. */
+function refKey_(url) {
+  var m = String(url || '').trim().match(/^(https?):\/\/([^\/?#]+)([^?#]*)(\?[^#]*)?/i);
+  if (!m) return '';
+  var host = m[2].toLowerCase().replace(/^www\./, ''), path = m[3].replace(/\/+$/, '');
+  var q = (m[4] || '').slice(1).split('&').filter(function (p) { return p && !/^(utm_[a-z]+|fbclid|gclid|igshid|igsh|si|mibextid|ref_src)=/i.test(p); });
+  return host + path + (q.length ? '?' + q.join('&') : '');
+}
+/** A link as typed in a chat, without the full stop or bracket after it. Keeps (…) that belong to it, as in Wikipedia links. */
+function refCleanUrl_(url) {
+  var u = String(url || '').trim().replace(/^<+/, ''), n = function (c) { return u.split(c).length - 1; };
+  while (u) {
+    var last = u.slice(-1);
+    if (/[\]}>.,;:!?'"*_~]/.test(last) || last === ')' && n(')') > n('(')) u = u.slice(0, -1); else break;
+  }
+  return u;
+}
+function refPush_(chat, links, source) {
+  var c = refTab_('RefChat'), t = refTab_('Reference'), ci = refUpsertChat_(c, chat), have = {}, added = 0;
+  var chatId = get_(c, c.rows[ci], 'ChatID'), chatName = get_(c, c.rows[ci], 'Name');
+  t.rows.forEach(function (r) { if (get_(t, r, 'ChatID') === chatId) have[get_(t, r, 'UrlKey')] = 1; });
+  links.slice(0, 3000).forEach(function (l) {
+    var url = refCleanUrl_(l.url), key = refKey_(url);
+    if (!key || have[key]) return;
+    have[key] = 1;
+    append_(t, { RefID: 'REF-' + hex_(8), ChatID: chatId, ChatName: chatName, Url: url, UrlKey: key, Domain: key.split('/')[0],
+      SharedBy: String(l.sharedBy || '').slice(0, 80), SharedAt: String(l.sharedAt || '').slice(0, 40), Message: String(l.message || '').slice(0, 300),
+      Status: 'Pending', Tries: 0, AddedAt: new Date(), Source: source });
+    added++;
+  });
+  setCell_(c, ci, 'SyncedAt', new Date());
+  var total = t.rows.filter(function (r) { return get_(t, r, 'ChatID') === chatId; }).length;
+  setCell_(c, ci, 'LinkCount', total);
+  return { ok: true, added: added, total: total, chatId: chatId };
+}
+function refObj_(t, r) {
+  var o = {};
+  [['id', 'RefID'], ['chatId', 'ChatID'], ['chat', 'ChatName'], ['url', 'Url'], ['domain', 'Domain'], ['title', 'Title'], ['summary', 'Summary'],
+   ['category', 'Category'], ['categoryBy', 'CategoryBy'], ['by', 'SharedBy'], ['at', 'SharedAt'], ['message', 'Message'], ['status', 'Status'],
+   ['error', 'Error'], ['addedAt', 'AddedAt']].forEach(function (p) { o[p[0]] = get_(t, r, p[1]); });
+  return o;
+}
+function refLinks_(chatId) {
+  var t = refTab_('Reference');
+  return t.rows.filter(function (r) { return r[t.col.RefID] && (!chatId || get_(t, r, 'ChatID') === chatId); })
+    .map(function (r) { return refObj_(t, r); }).reverse().slice(0, 1500);
+}
+function refFind_(t, id) {
+  for (var i = 0; i < t.rows.length; i++) if (get_(t, t.rows[i], 'RefID') === id) return i;
+  throw new Error('Link not found');
+}
+/** Change a link's category by hand, or try a failed link again. */
+function refUpdate_(id, p) {
+  var t = refTab_('Reference'), i = refFind_(t, id);
+  if (p.category !== undefined) {
+    if (refCategoryNames_().indexOf(p.category) < 0) throw new Error('Unknown category');
+    setCell_(t, i, 'Category', p.category); setCell_(t, i, 'CategoryBy', 'You');
+  }
+  if (p.retry) { setCell_(t, i, 'Status', 'Pending'); setCell_(t, i, 'Tries', 0); setCell_(t, i, 'Error', ''); }
+  return refObj_(t, t.rows[i]);
+}
+
+/**
+ * Open and summarise up to REF_BATCH waiting links (of one chat first, if given). The pages are fetched outside the
+ * lock, so the rest of the app is never kept waiting. Returns how many are still waiting.
+ */
+function refProcess_(chatId) {
+  var lock = LockService.getScriptLock(), picked = [], now = Date.now();
+  lock.waitLock(20000);
+  try {
+    var t = refTab_('Reference'), order = [];
+    t.rows.forEach(function (r, i) {
+      var st = get_(t, r, 'Status'), fetched = r[t.col.FetchedAt];
+      var stale = st === 'Working' && (!(fetched instanceof Date) || now - fetched.getTime() > 10 * 60000);
+      if (st === 'Pending' || stale) order.push(i);
+    });
+    if (chatId) order.sort(function (a, b) { return (get_(t, t.rows[b], 'ChatID') === chatId) - (get_(t, t.rows[a], 'ChatID') === chatId); });
+    order.slice(0, REF_BATCH).forEach(function (i) {
+      setCell_(t, i, 'Status', 'Working'); setCell_(t, i, 'FetchedAt', new Date());
+      picked.push({ id: get_(t, t.rows[i], 'RefID'), url: get_(t, t.rows[i], 'Url'), message: get_(t, t.rows[i], 'Message'), tries: +t.rows[i][t.col.Tries] || 0 });
+    });
+  } finally { lock.releaseLock(); }
+
+  var results = picked.map(function (p) {
+    try { return { p: p, s: refSummarise_(p.url, p.message) }; } catch (err) { return { p: p, err: String(err.message || err).slice(0, 200) }; }
+  });
+
+  lock.waitLock(20000);
+  try {
+    var t2 = refTab_('Reference'), left = 0;
+    results.forEach(function (x) {
+      var i = refFind_(t2, x.p.id);
+      if (x.s) {
+        setCell_(t2, i, 'Title', x.s.title); setCell_(t2, i, 'Summary', x.s.summary);
+        if (get_(t2, t2.rows[i], 'CategoryBy') !== 'You') { setCell_(t2, i, 'Category', x.s.category); setCell_(t2, i, 'CategoryBy', x.s.by); }
+        setCell_(t2, i, 'Status', 'Done'); setCell_(t2, i, 'Error', '');
+      } else {
+        var tries = x.p.tries + 1;
+        setCell_(t2, i, 'Tries', tries); setCell_(t2, i, 'Error', x.err);
+        setCell_(t2, i, 'Status', tries >= 2 ? 'Failed' : 'Pending');
+        // Still give it a category from the link and message alone.
+        if (get_(t2, t2.rows[i], 'CategoryBy') !== 'You') { setCell_(t2, i, 'Category', refCategorise_(x.p.url, '', x.p.message)); setCell_(t2, i, 'CategoryBy', 'Link only'); }
+      }
+      setCell_(t2, i, 'FetchedAt', new Date());
+    });
+    t2.rows.forEach(function (r) { var st = get_(t2, r, 'Status'); if (st === 'Pending' || st === 'Working') left++; });
+    return { ok: true, done: results.length, left: left };
+  } finally { lock.releaseLock(); }
+}
+/** Run every few minutes from a time trigger (optional): Triggers > Add trigger > summariseReferences > Time-driven. */
+function summariseReferences() { for (var k = 0; k < 5; k++) { if (!refProcess_('').left) break; } }
+
+function refFetch_(url, opt) {
+  return UrlFetchApp.fetch(url, Object.assign({ muteHttpExceptions: true, followRedirects: true, validateHttpsCertificates: true,
+    headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36',
+      'Accept-Language': 'en-MY,en;q=0.9,ms;q=0.8,zh;q=0.7' } }, opt || {}));
+}
+/** { title, summary, category, by } for one link. */
+function refSummarise_(url, message) {
+  var info = { title: '', description: '', text: '', kind: '' };
+  var key = refKey_(url), host = key.split('/')[0];
+  if (/(^|\.)youtube\.com$|^youtu\.be$/.test(host)) {
+    var o = refFetch_('https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent(url));
+    if (o.getResponseCode() === 200) { var j = JSON.parse(o.getContentText()); info.title = j.title || ''; info.author = j.author_name || ''; info.kind = 'YouTube video'; }
+  }
+  var res = refFetch_(url), code = res.getResponseCode(), type = String(res.getHeaders()['Content-Type'] || res.getHeaders()['content-type'] || '');
+  if (code >= 400 && !info.title) throw new Error('The page answered ' + code + (code === 403 || code === 401 ? ' (it needs a login, or blocks robots)' : ''));
+  if (/pdf/i.test(type) || /\.pdf$/i.test(key)) {
+    info.kind = 'PDF';
+    info.title = info.title || decodeURIComponent(key.split('/').pop().replace(/\.pdf$/i, '')).replace(/[-_+]+/g, ' ');
+    info.text = 'PDF document, ' + Math.round(res.getBlob().getBytes().length / 1024) + ' KB.';
+    try { info.text = refPdfText_(res.getBlob()) || info.text; } catch (e) {}
+  } else if (/image\//i.test(type)) {
+    info.kind = 'Image'; info.text = 'An image (' + type.split(';')[0] + ').';
+  } else if (code < 400) {
+    var page = refPage_(res.getContentText().slice(0, REF_MAX_HTML));
+    info.title = info.title || page.title; info.description = page.description; info.text = page.text; info.site = page.site;
+  }
+  var ai = refAi_(url, info, message);
+  if (ai) return { title: (info.title || ai.title || key).slice(0, 200), summary: ai.summary, category: ai.category, by: 'AI' };
+  return { title: (info.title || key).slice(0, 200), summary: refSummaryOf_(info), category: refCategorise_(url, info.title + ' ' + info.description, info.text + ' ' + (message || '')), by: 'Auto' };
+}
+/** A PDF's first words, through Drive's free text conversion (needs the Drive API advanced service; skipped without it). */
+function refPdfText_(blob) {
+  if (typeof Drive === 'undefined' || !Drive.Files) return '';
+  var f = Drive.Files.create({ name: 'ref-tmp', mimeType: 'application/vnd.google-apps.document' }, blob);
+  try { return DocumentApp.openById(f.id).getBody().getText().replace(/\s+/g, ' ').slice(0, 3000); }
+  finally { try { Drive.Files.remove(f.id); } catch (e) { DriveApp.getFileById(f.id).setTrashed(true); } }
+}
+
+function refDecode_(s) {
+  return String(s || '').replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&#(\d+);/g, function (m, d) { return String.fromCharCode(+d); })
+    .replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ').trim();
+}
+/** Title, description and readable text of an HTML page. */
+function refPage_(html) {
+  var meta = function (names) {
+    for (var i = 0; i < names.length; i++) {
+      var re1 = new RegExp('<meta[^>]+(?:property|name)=["\']' + names[i] + '["\'][^>]*content=["\']([^"\']*)["\']', 'i');
+      var re2 = new RegExp('<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']' + names[i] + '["\']', 'i');
+      var m = html.match(re1) || html.match(re2);
+      if (m && refDecode_(m[1])) return refDecode_(m[1]);
+    }
+    return '';
+  };
+  var t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  var body = html.replace(/<(script|style|noscript|svg|nav|header|footer|form|aside|template)[\s\S]*?<\/\1>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ');
+  var paras = [];
+  body.replace(/<(p|h1|h2|li)[^>]*>([\s\S]*?)<\/\1>/gi, function (m, tag, inner) {
+    var s = refDecode_(inner.replace(/<[^>]+>/g, ' '));
+    if (s.length >= (tag === 'p' ? 40 : 20) && !/cookie|subscribe|sign in|log in|javascript|all rights reserved|copyright/i.test(s)) paras.push(s);
+    return m;
+  });
+  if (!paras.length) { var plain = refDecode_(body.replace(/<[^>]+>/g, ' ')); if (plain) paras.push(plain.slice(0, 2000)); }
+  return { title: meta(['og:title', 'twitter:title']) || refDecode_(t ? t[1] : ''), description: meta(['og:description', 'description', 'twitter:description']),
+    site: meta(['og:site_name']), text: paras.join(' ').slice(0, 4000) };
+}
+/** Two or three sentences: the page's own description, topped up with its first lines. */
+function refSummaryOf_(info) {
+  var d = info.description || '', text = info.text || '';
+  var sentences = function (s) { return (s.match(/[^.!?。！？]+[.!?。！？]+["')\]]?|[^.!?。！？]+$/g) || []).map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 2; }); };
+  var out = d;
+  if (out.length < 120) {
+    var extra = sentences(text).filter(function (s) { return out.indexOf(s.slice(0, 30)) < 0 && s !== info.title; });
+    while (extra.length && out.length < 220) out = (out ? out + ' ' : '') + extra.shift();
+  }
+  if (!out) out = info.kind ? info.kind + (info.author ? ' by ' + info.author : '') + '.' : 'No description on this page.';
+  else if (info.kind === 'YouTube video' && info.author) out = 'YouTube video by ' + info.author + '. ' + out;
+  return out.length > 320 ? out.slice(0, 317).replace(/\s+\S*$/, '') + '…' : out;
+}
+/** The best-matching category: a website match counts most, then words in the title, then words in the text. */
+function refCategorise_(url, title, text) {
+  var u = String(url || '').toLowerCase(), ti = ' ' + String(title || '').toLowerCase() + ' ', tx = ' ' + String(text || '').toLowerCase() + ' ';
+  var best = 'Other', bestScore = 0;
+  REF_CATEGORIES.forEach(function (c) {
+    var score = 0;
+    c[1].forEach(function (d) { if (u.indexOf(d) >= 0) score += 6; });
+    c[2].forEach(function (w) { if (ti.indexOf(w) >= 0) score += 2; if (tx.indexOf(w) >= 0) score += 1; });
+    if (score > bestScore) { best = c[0]; bestScore = score; }
+  });
+  return best;
+}
+/** Optional free AI summary (Gemini free tier). Returns null when no key is set or anything goes wrong. */
+function refAi_(url, info, message) {
+  var key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (!key) return null;
+  try {
+    var cats = refCategoryNames_();
+    var prompt = 'Summarise this web page in 2 or 3 short sentences in English, and pick one category from: ' + cats.join(', ') +
+      '. Reply only with JSON {"title":"...","summary":"...","category":"..."}.\nURL: ' + url + '\nTitle: ' + info.title +
+      '\nDescription: ' + info.description + '\nText: ' + String(info.text || '').slice(0, 6000) + '\nShared with the message: ' + String(message || '').slice(0, 300);
+    var r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + REF_AI_MODEL + ':generateContent?key=' + encodeURIComponent(key), {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }) });
+    if (r.getResponseCode() !== 200) return null;
+    var j = JSON.parse(JSON.parse(r.getContentText()).candidates[0].content.parts[0].text);
+    if (!j.summary) return null;
+    return { title: String(j.title || ''), summary: String(j.summary).slice(0, 500), category: cats.indexOf(j.category) >= 0 ? j.category : refCategorise_(url, info.title, info.text) };
+  } catch (e) { return null; }
 }
