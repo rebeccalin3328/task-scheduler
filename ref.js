@@ -59,7 +59,16 @@
     $('tabRef').classList.toggle('hidden', !admin());
     if (!admin() && !$('refView').classList.contains('hidden')) C.show('task');
   }
-  $('tabRef').onclick = function () { C.show('ref'); loadChats(); };
+  // Opens this screen itself too, so it still works while the phone has an older copy of crm.js cached.
+  $('tabRef').onclick = function () {
+    C.show('ref');
+    ['taskView', 'calView', 'evView', 'admView', 'clientsView', 'detailView'].forEach(function (v) { if ($(v)) $(v).classList.add('hidden'); });
+    $('refView').classList.remove('hidden');
+    ['tabTask', 'tabCal', 'tabClients'].forEach(function (t) { $(t).classList.remove('on'); });
+    $('tabRef').classList.add('on');
+    note('Loading your chats…');
+    loadChats();
+  };
 
   function loadChats() {
     return C.api({ action: 'refChats' }).then(function (j) {
@@ -68,7 +77,8 @@
       var dl = $('refChatList'); dl.innerHTML = '';
       chats.forEach(function (c) { var o = el('option'); o.value = c.name; dl.appendChild(o); });
       $('refPc').textContent = j.pcSeen ? 'Your PC last checked in ' + j.pcSeen + '.' : 'Your PC has not checked in yet. See REFERENCE-SETUP.md to start it.';
-      drawRecent();
+      note(chats.length ? '' : 'No chats yet. Start reference-sync.py on your PC, or paste a chat below.');
+      drawRecent(); drawMatches();
       loadLinks();
     }, function (err) { note(err.kind === 'rejected' ? err.message : 'Could not load: ' + err.message); });
   }
@@ -81,11 +91,29 @@
       box.appendChild(b);
     });
   }
+  function drawMatches() {
+    var box = $('refMatches'); box.innerHTML = '';
+    var q = $('refFind').value.trim().toLowerCase();
+    if (chatId && q === chatName(chatId).toLowerCase()) return;
+    var list = chats.filter(function (c) { return !q || c.name.toLowerCase().indexOf(q) >= 0 || c.id.indexOf(q) === 0; });
+    list.slice(0, q ? 30 : 8).forEach(function (c) {
+      var r = el('div', 'client');
+      var av = el('div', 'av', c.kind === 'Group' ? '👥' : '👤');
+      var meta = el('div', 'meta'); meta.appendChild(el('div', 'nm', c.name));
+      meta.appendChild(el('div', 'sub', c.links ? c.links + ' links' : (c.kind === 'Group' ? 'Group' : 'Contact')));
+      r.appendChild(av); r.appendChild(meta);
+      r.onclick = function () { pick(c.id); };
+      box.appendChild(r);
+    });
+    if (list.length > (q ? 30 : 8)) box.appendChild(el('div', 'empty', (list.length - (q ? 30 : 8)) + ' more. Type part of the name.'));
+    if (q && !list.length) box.appendChild(el('div', 'empty', 'No chat matches "' + $('refFind').value + '".'));
+  }
+  $('refFind').addEventListener('input', drawMatches);
   function pick(id) {
     chatId = id; filter = '';
     $('refFind').value = id ? chatName(id) : '';
     $('refGet').disabled = !id || /^paste:/.test(id);
-    drawRecent(); loadLinks();
+    drawRecent(); drawMatches(); loadLinks();
   }
   $('refFind').addEventListener('change', function () {
     var v = $('refFind').value.trim().toLowerCase();
