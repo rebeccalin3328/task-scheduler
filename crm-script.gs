@@ -40,7 +40,14 @@ var PRIORITIES = ['Urgent', 'High', 'Normal', 'Low']; // Task.Priority; the app 
 var DELETED_STATUS = 'Deleted';  // deleted tasks keep their row (for the record) but are hidden everywhere
 var STATUS_TAGS = ['Lead', 'Prospect', 'Customer', 'Inactive']; // kept in Contact.CRMTags
 
-function doGet(e) { return out_(handle_(e.parameter || {})); }
+function doGet(e) { return out_(handle_((e && e.parameter) || {})); }
+/** Run this once from the Apps Script editor (pick "authorize", then ▶ Run) to give the script every permission it needs,
+ *  including opening web pages for Reference. It writes "OK" in the log when all is well. */
+function authorize() {
+  UrlFetchApp.fetch('https://www.google.com', { muteHttpExceptions: true });
+  SpreadsheetApp.getActiveSpreadsheet(); DriveApp.getRootFolder(); CalendarApp.getDefaultCalendar();
+  Logger.log('OK: the script can open web pages, sheets, Drive and Calendar.');
+}
 function doPost(e) {
   var body = {};
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
@@ -829,6 +836,7 @@ function appendMany_(t, objs) {
   rows.forEach(function (r) { t.rows.push(r); });
 }
 var REF_CHAT_ID = /@(s\.whatsapp\.net|g\.us|lid|c\.us)$/; // people and groups; not status updates, channels or broadcast lists
+var REF_SETUP_ERROR = 'The script is not allowed to open web pages yet. In Apps Script, run doGet once and allow access. These links are then tried again by themselves.';
 function refSaveRow_(t, i) { t.sh.getRange(i + 2, 1, 1, t.head.length).setValues([t.rows[i].slice(0, t.head.length)]); }
 function refSeen_() { PropertiesService.getScriptProperties().setProperty('refPcSeen', fmt_(new Date(), 'yyyy-MM-dd HH:mm')); }
 function refCategoryNames_() { return REF_CATEGORIES.map(function (c) { return c[0]; }); }
@@ -968,7 +976,9 @@ function refProcess_(chatId) {
     t.rows.forEach(function (r, i) {
       var st = get_(t, r, 'Status'), fetched = r[t.col.FetchedAt];
       var stale = st === 'Working' && (!(fetched instanceof Date) || now - fetched.getTime() > 10 * 60000);
-      if (st === 'Pending' || stale) order.push(i);
+      // Links that failed only because the script wasn't allowed to open pages yet are tried again by themselves.
+      var setup = st === 'Failed' && (get_(t, r, 'Error') === REF_SETUP_ERROR || /permission to call UrlFetchApp/i.test(get_(t, r, 'Error')));
+      if (st === 'Pending' || stale || setup) order.push(i);
     });
     if (chatId) order.sort(function (a, b) { return (get_(t, t.rows[b], 'ChatID') === chatId) - (get_(t, t.rows[a], 'ChatID') === chatId); });
     order.slice(0, REF_BATCH).forEach(function (i) {
@@ -991,8 +1001,9 @@ function refProcess_(chatId) {
         if (!mine) { r[c.Category] = x.s.category; r[c.CategoryBy] = x.s.by; }
         r[c.Status] = 'Done'; r[c.Error] = '';
       } else {
-        var tries = x.p.tries + 1;
-        r[c.Tries] = tries; r[c.Error] = x.err; r[c.Status] = tries >= 2 ? 'Failed' : 'Pending';
+        // A missing permission (script not authorised yet) is not the page's fault: keep the link waiting.
+        var setup = /permission|authori[sz]/i.test(x.err), tries = setup ? x.p.tries : x.p.tries + 1;
+        r[c.Tries] = tries; r[c.Error] = setup ? REF_SETUP_ERROR : x.err; r[c.Status] = setup ? 'Failed' : tries >= 2 ? 'Failed' : 'Pending';
         // Still give it a category from the link and message alone.
         if (!mine) { r[c.Category] = refCategorise_(x.p.url, '', x.p.message); r[c.CategoryBy] = 'Link only'; }
       }

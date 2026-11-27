@@ -251,13 +251,37 @@
     cats.filter(function (c) { return count[c]; }).forEach(function (c) {
       var b = el('button', filter === c ? 'on' : '', c + ' · ' + count[c]); b.onclick = function () { filter = filter === c ? '' : c; render(); }; box.appendChild(b);
     });
-    var left = links.filter(waiting).length;
+    var left = links.filter(waiting).length, failed = links.filter(function (l) { return l.status === 'Failed'; }).length;
+    $('refRetryAll').classList.toggle('hidden', !failed || retrying);
+    $('refRetryAll').textContent = '↻ Try again: all ' + failed + ' that could not open';
     $('refTitle').textContent = (chatId ? chatName(chatId) : 'All chats') + (left ? ' · summarising ' + left + '…' : '');
     var list = $('refList'); list.innerHTML = '';
     if (!shown.length) list.appendChild(el('div', 'empty', links.length ? 'No links match.' : chatId ? 'No links yet. Tap "Get links" or paste the chat below.' : 'Pick a chat to start.'));
     shown.slice(0, 300).forEach(function (l) { list.appendChild(card(l)); });
   }
   $('refSearch').addEventListener('input', render);
+
+  // One tap: put every failed link (in this chat, or all chats) back in the queue, then summarise them.
+  var retrying = false;
+  $('refRetryAll').onclick = function () {
+    var ids = links.filter(function (l) { return l.status === 'Failed'; }).map(function (l) { return l.id; });
+    if (!ids.length) return;
+    retrying = true; render();
+    var done = 0, i = 0;
+    function next() {
+      if (i >= ids.length) return Promise.resolve();
+      var id = ids[i++];
+      return C.api({ action: 'refUpdate', id: id, retry: true }).then(function () {
+        done++; note('Queued ' + done + ' of ' + ids.length + ' again…');
+      }, function () {}).then(next);
+    }
+    // Four at a time, so it doesn't take ages.
+    Promise.all([next(), next(), next(), next()]).then(function () {
+      retrying = false;
+      note(done + ' links will be opened again now.');
+      return loadLinks();
+    });
+  };
 
   // Download what is on screen (this chat or all chats, the chosen category and search) as an Excel file.
   function shownLinks() {

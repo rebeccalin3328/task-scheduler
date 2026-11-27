@@ -391,13 +391,28 @@ assert.equal(call({ action: 'list' }).files.length, 3);
   const gone = by('https://gone.example.com/x');
   assert.equal(gone.status, 'Failed'); assert.ok(/404/.test(gone.error));
 
+  // Not authorised to fetch yet: the link waits without using up its tries, and is redone once allowed
+  {
+    const realFetch = R.ctx.UrlFetchApp.fetch;
+    R.pages['https://late.example.com/a'] = { body: '<title>Late page</title><p>This page opens fine once the script may fetch pages.</p>' };
+    ref({ action: 'refPush', chat: { id: '1203@g.us' }, links: [{ url: 'https://late.example.com/a' }] });
+    R.ctx.UrlFetchApp.fetch = () => { throw new Error('You do not have permission to call UrlFetchApp.fetch. Required permissions: https://www.googleapis.com/auth/script.external_request'); };
+    assert.equal(ref({ action: 'refProcess' }).left, 0);
+    let late = ref({ action: 'refLinks' }).links.find(l => l.url === 'https://late.example.com/a');
+    assert.equal(late.status, 'Failed'); assert.ok(/run doGet once/.test(late.error), late.error);
+    R.ctx.UrlFetchApp.fetch = realFetch;
+    ref({ action: 'refProcess' });
+    late = ref({ action: 'refLinks' }).links.find(l => l.url === 'https://late.example.com/a');
+    assert.equal(late.status, 'Done', 'redone by itself once allowed'); assert.equal(late.title, 'Late page');
+  }
+
   // Fix a category by hand; a retry keeps it
   assert.equal(ref({ action: 'refUpdate', id: news.id, category: 'News' }).link.category, 'News');
   assert.equal(ref({ action: 'refUpdate', id: news.id, category: 'Nonsense' }).ok, false);
   ref({ action: 'refUpdate', id: news.id, retry: true }); ref({ action: 'refProcess' });
   assert.equal(ref({ action: 'refLinks' }).links.find(l => l.id === news.id).category, 'News', 'your own category is kept');
   chats = ref({ action: 'refChats' }).chats;
-  assert.equal(chats.find(c => c.id === '1203@g.us').links, 4);
+  assert.equal(chats.find(c => c.id === '1203@g.us').links, 5);
   assert.equal(asTeam({ action: 'list' }).ok, true, 'the rest of the app still works');
 
   // Thousands of chats are saved in one write, not one per chat (that took minutes and held the lock)
