@@ -1,5 +1,5 @@
 // Caches the app so it opens instantly and works offline.
-const CACHE = 'task-scheduler-v22';
+const CACHE = 'task-scheduler-v23';
 const FILES = ['./', './index.html', './parser.js', './crm.js', './cal.js', './picks.js', './files.js', './import.js', './ref.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

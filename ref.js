@@ -75,7 +75,8 @@
     ['tabTask', 'tabCal', 'tabClients'].forEach(function (t) { $(t).classList.remove('on'); });
     $('tabRef').classList.add('on');
     note('Loading your chats…');
-    loadChats();
+    var slow = setTimeout(function () { if ($('refNote').textContent === 'Loading your chats…') note('Still loading… the sheet may be busy summarising links. Give it a minute.'); }, 15000);
+    loadChats().then(function () { clearTimeout(slow); });
   };
 
   function loadChats() {

@@ -805,14 +805,15 @@ function ref_(req) {
   if (!admin) throw new Error('Only the admin can use Reference');
   var a = req.action;
   if (a === 'refProcess') return refProcess_(req.chatId);
+  // Reading never waits: the list shows straight away even while links are being summarised.
+  if (a === 'refChats') return { ok: true, chats: refChats_(), pcSeen: PropertiesService.getScriptProperties().getProperty('refPcSeen') || '', categories: refCategoryNames_() };
+  if (a === 'refLinks') return { ok: true, links: refLinks_(req.chatId), categories: refCategoryNames_() };
+  if (a === 'refPending') { refSeen_(); return { ok: true, chats: refPending_() }; }
   var lock = refLock_();
   lock.waitLock(30000);
   try {
-    if (a === 'refChats') return { ok: true, chats: refChats_(), pcSeen: PropertiesService.getScriptProperties().getProperty('refPcSeen') || '', categories: refCategoryNames_() };
-    if (a === 'refLinks') return { ok: true, links: refLinks_(req.chatId), categories: refCategoryNames_() };
     if (a === 'refRequest') return { ok: true, chat: refRequest_(req.chatId, req.name) };
     if (a === 'refPushChats') { refSeen_(); return { ok: true, count: refPushChats_(req.chats || []) }; }
-    if (a === 'refPending') { refSeen_(); return { ok: true, chats: refPending_() }; }
     if (a === 'refPush') { if (req.source === 'pc') refSeen_(); return refPush_(req.chat || {}, req.links || [], req.source || 'app'); }
     if (a === 'refUpdate') return { ok: true, link: refUpdate_(req.id, req) };
     throw new Error('Unknown action');
@@ -828,6 +829,7 @@ function appendMany_(t, objs) {
   rows.forEach(function (r) { t.rows.push(r); });
 }
 var REF_CHAT_ID = /@(s\.whatsapp\.net|g\.us|lid|c\.us)$/; // people and groups; not status updates, channels or broadcast lists
+function refSaveRow_(t, i) { t.sh.getRange(i + 2, 1, 1, t.head.length).setValues([t.rows[i].slice(0, t.head.length)]); }
 function refSeen_() { PropertiesService.getScriptProperties().setProperty('refPcSeen', fmt_(new Date(), 'yyyy-MM-dd HH:mm')); }
 function refCategoryNames_() { return REF_CATEGORIES.map(function (c) { return c[0]; }); }
 
@@ -970,7 +972,7 @@ function refProcess_(chatId) {
     });
     if (chatId) order.sort(function (a, b) { return (get_(t, t.rows[b], 'ChatID') === chatId) - (get_(t, t.rows[a], 'ChatID') === chatId); });
     order.slice(0, REF_BATCH).forEach(function (i) {
-      setCell_(t, i, 'Status', 'Working'); setCell_(t, i, 'FetchedAt', new Date());
+      var r = t.rows[i]; r[t.col.Status] = 'Working'; r[t.col.FetchedAt] = new Date(); refSaveRow_(t, i);
       picked.push({ id: get_(t, t.rows[i], 'RefID'), url: get_(t, t.rows[i], 'Url'), message: get_(t, t.rows[i], 'Message'), tries: +t.rows[i][t.col.Tries] || 0 });
     });
   } finally { lock.releaseLock(); }
@@ -983,19 +985,19 @@ function refProcess_(chatId) {
   try {
     var t2 = refTab_('Reference'), left = 0;
     results.forEach(function (x) {
-      var i = refFind_(t2, x.p.id);
+      var i = refFind_(t2, x.p.id), r = t2.rows[i], c = t2.col, mine = get_(t2, r, 'CategoryBy') === 'You';
       if (x.s) {
-        setCell_(t2, i, 'Title', x.s.title); setCell_(t2, i, 'Summary', x.s.summary);
-        if (get_(t2, t2.rows[i], 'CategoryBy') !== 'You') { setCell_(t2, i, 'Category', x.s.category); setCell_(t2, i, 'CategoryBy', x.s.by); }
-        setCell_(t2, i, 'Status', 'Done'); setCell_(t2, i, 'Error', '');
+        r[c.Title] = x.s.title; r[c.Summary] = x.s.summary;
+        if (!mine) { r[c.Category] = x.s.category; r[c.CategoryBy] = x.s.by; }
+        r[c.Status] = 'Done'; r[c.Error] = '';
       } else {
         var tries = x.p.tries + 1;
-        setCell_(t2, i, 'Tries', tries); setCell_(t2, i, 'Error', x.err);
-        setCell_(t2, i, 'Status', tries >= 2 ? 'Failed' : 'Pending');
+        r[c.Tries] = tries; r[c.Error] = x.err; r[c.Status] = tries >= 2 ? 'Failed' : 'Pending';
         // Still give it a category from the link and message alone.
-        if (get_(t2, t2.rows[i], 'CategoryBy') !== 'You') { setCell_(t2, i, 'Category', refCategorise_(x.p.url, '', x.p.message)); setCell_(t2, i, 'CategoryBy', 'Link only'); }
+        if (!mine) { r[c.Category] = refCategorise_(x.p.url, '', x.p.message); r[c.CategoryBy] = 'Link only'; }
       }
-      setCell_(t2, i, 'FetchedAt', new Date());
+      r[c.FetchedAt] = new Date();
+      refSaveRow_(t2, i); // one write per link
     });
     t2.rows.forEach(function (r) { var st = get_(t2, r, 'Status'); if (st === 'Pending' || st === 'Working') left++; });
     return { ok: true, done: results.length, left: left };
