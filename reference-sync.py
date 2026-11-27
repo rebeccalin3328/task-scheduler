@@ -17,7 +17,12 @@ Setup: see REFERENCE-SETUP.md. Python 3.8+, no extra packages.
   python3 reference-sync.py --once     check once and stop
   python3 reference-sync.py --chats    send the chat list now and stop
   python3 reference-sync.py --dump "Sales team"   show what the MCP returns for one chat (for fixing problems)
+  python3 reference-sync.py --install  keep it running in the background: starts hidden whenever you log in to
+                                       Windows, and restarts if it stops. Log: reference-sync.log next to this file.
+  python3 reference-sync.py --uninstall   stop that
+  python3 reference-sync.py --status   is it running? shows the last lines of the log
 """
+import fcntl
 import glob
 import json
 import os
@@ -32,6 +37,8 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, 'reference-sync.json')
+LOG = os.path.join(HERE, 'reference-sync.log')
+TASK = 'Task Scheduler Reference sync'  # the Windows scheduled task made by --install
 # The only MCP tools this script may call. All of them only read.
 READ_TOOLS = {'list_accounts', 'session_status', 'list_chats', 'get_chat', 'list_messages', 'search_contacts'}
 CHECK_EVERY = 60          # seconds between checks for chats you asked for
@@ -392,6 +399,75 @@ class Reader:
     def close(self):
         if self.m:
             self.m.close()
+        if self.s:
+            self.s.db.close()
+
+
+# ---------- running in the background (Windows Task Scheduler, from WSL) ----------
+def powershell(script):
+    for exe in ('powershell.exe', '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'):
+        try:
+            return subprocess.run([exe, '-NoProfile', '-NonInteractive', '-Command', script], capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            continue
+    sys.exit('Could not reach Windows PowerShell from WSL. Run this inside WSL on your PC.')
+
+
+def install():
+    distro = os.environ.get('WSL_DISTRO_NAME')
+    if not distro:
+        sys.exit('Run --install inside WSL (Ubuntu) on your Windows PC.')
+    load_config()  # make sure the keys are filled in first
+    me = os.path.abspath(__file__)
+    if ' ' in me:
+        sys.exit('Move this file to a folder without spaces in its name (for example ~/reference-sync/), then run --install again.')
+    # conhost --headless runs WSL with no window, so closing windows can't stop it.
+    arg = "--headless C:\\Windows\\System32\\wsl.exe -d %s -e python3 %s --log" % (distro, me)
+    ps = '''$ErrorActionPreference = 'Stop'
+$a = New-ScheduledTaskAction -Execute 'C:\\Windows\\System32\\conhost.exe' -Argument "%s"
+$t = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\\$env:USERNAME"
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName '%s' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+Start-ScheduledTask -TaskName '%s'
+''' % (arg, TASK, TASK)
+    r = powershell(ps)
+    if r.returncode:
+        sys.exit('Windows refused: ' + (r.stderr or r.stdout).strip()[:500])
+    print('Installed. It now runs in the background, starts when you log in to Windows, and restarts if it stops.')
+    print('Check on it any time with:  python3 ' + me + ' --status')
+
+
+def uninstall():
+    r = powershell("Stop-ScheduledTask -TaskName '%s' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName '%s' -Confirm:$false" % (TASK, TASK))
+    print('Removed.' if r.returncode == 0 else 'Not removed: ' + (r.stderr or r.stdout).strip()[:300])
+
+
+def status():
+    running = False
+    try:
+        with open(os.path.join(HERE, '.reference-sync.lock'), 'a') as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(f, fcntl.LOCK_UN)
+    except OSError:
+        running = True
+    print('Running.' if running else 'NOT running. Start it with:  python3 ' + os.path.abspath(__file__) + ' --install')
+    if os.path.exists(LOG):
+        print('Last log lines:')
+        with open(LOG, errors='replace') as f:
+            print(''.join(f.readlines()[-8:]).rstrip())
+
+
+def single_instance(background):
+    """Only one copy at a time (a second one would fight the first for WhatsApp). The background copy waits its turn:
+    if you also started one in a window, it takes over when that window closes."""
+    f = open(os.path.join(HERE, '.reference-sync.lock'), 'a')
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if not background:
+            sys.exit('reference-sync is already running in the background. Nothing to do. (Check it with --status.)')
+        fcntl.flock(f, fcntl.LOCK_EX)
+    return f
 
 
 # ---------- main ----------
@@ -405,8 +481,9 @@ def send_chats(cfg, rd):
         log('Sent', n, 'chat names.')
 
 
-def answer_requests(cfg, rd):
-    pending = crm(cfg, {'action': 'refPending'})['chats']
+def answer_requests(cfg, rd, pending=None):
+    if pending is None:
+        pending = crm(cfg, {'action': 'refPending'})['chats']
     for c in pending:
         log('Reading links in', c['name'] or c['id'], '…')
         links = rd.links(c['id'])
@@ -421,8 +498,14 @@ def answer_requests(cfg, rd):
 
 
 def main():
-    cfg = load_config()
     args = sys.argv[1:]
+    if args[:1] == ['--install']:
+        return install()
+    if args[:1] == ['--uninstall']:
+        return uninstall()
+    if args[:1] == ['--status']:
+        return status()
+    cfg = load_config()
     if args[:1] == ['--dump']:
         m = Mcp(cfg['mcp_command'])
         print('Tools:', ', '.join(sorted(m.tools)))
@@ -439,39 +522,52 @@ def main():
             print('\nLinks found:', json.dumps(links_from(payload(raw)), ensure_ascii=False, indent=1)[:2000])
         m.close()
         return
+    background = '--log' in args
+    if background:  # background: write to reference-sync.log (kept under 1 MB)
+        if os.path.exists(LOG) and os.path.getsize(LOG) > 1000000:
+            os.replace(LOG, LOG + '.old')
+        sys.stdout = sys.stderr = open(LOG, 'a', buffering=1)
+        args = [a for a in args if a != '--log']
+    keep = single_instance(background)  # noqa: F841 (held until exit)
+    log('Starting. Checking for chats you ask for every minute.')
+    if args[:1] == ['--chats']:
+        with_reader(cfg, lambda rd: send_chats(cfg, rd))
+        return
+    last_chats = 0
+    while True:
+        # WhatsApp is opened only while there is something to read, then let go, so Claude's own WhatsApp
+        # connection can use the account the rest of the time.
+        try:
+            pending = crm(cfg, {'action': 'refPending'})['chats']
+            chats_due = time.time() - last_chats >= CHATS_EVERY
+            if pending or chats_due:
+                def work(rd):
+                    answer_requests(cfg, rd, pending)
+                    if chats_due:
+                        send_chats(cfg, rd)
+                with_reader(cfg, work)
+                if chats_due:
+                    last_chats = time.time()
+        except Exception as e:
+            msg = str(e)[:300]
+            if 'Lock timeout' in msg:
+                msg += ' (the sheet was busy)'
+            log('Problem:', msg, '- trying again in a minute.')
+            if args[:1] == ['--once']:
+                raise
+            if time.time() - last_chats >= CHATS_EVERY:
+                last_chats = time.time() - CHATS_EVERY + 5 * 60  # chat list: try again in 5 minutes
+        if args[:1] == ['--once']:
+            break
+        time.sleep(CHECK_EVERY)
+
+
+def with_reader(cfg, fn):
     rd = Reader(cfg)
     try:
-        if args[:1] == ['--chats']:
-            send_chats(cfg, rd)
-            return
-        last_chats = 0
-        while True:
-            # Chats you asked for come first; the chat list is a separate step, so a problem with one never blocks the other.
-            for step in ('requests', 'chats'):
-                if step == 'chats' and time.time() - last_chats < CHATS_EVERY:
-                    continue
-                try:
-                    if step == 'requests':
-                        answer_requests(cfg, rd)
-                    else:
-                        send_chats(cfg, rd)
-                        last_chats = time.time()
-                except Exception as e:
-                    msg = str(e)[:300]
-                    if 'Lock timeout' in msg:
-                        msg += ' (the sheet was busy; trying again in a minute)'
-                    log('Problem', '(' + step + '):', msg)
-                    if step == 'chats':
-                        last_chats = time.time() - CHATS_EVERY + 5 * 60  # try the chat list again in 5 minutes
-                    if rd.m and rd.m.p.poll() is not None:  # MCP stopped: start again
-                        rd.close()
-                        rd = Reader(cfg)
-            if args[:1] == ['--once']:
-                break
-            time.sleep(CHECK_EVERY)
+        return fn(rd)
     finally:
         rd.close()
-
 
 if __name__ == '__main__':
     main()

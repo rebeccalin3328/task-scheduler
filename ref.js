@@ -49,6 +49,14 @@
   // ---- Screen ----
   var $ = function (id) { return document.getElementById(id); };
   var C = window.CRM;
+  var pcSeen = '';
+  // The PC helper checks in every minute; more than 3 minutes of silence means it's off (or the PC is asleep).
+  function pcAgeMin() { var d = pcSeen ? new Date(pcSeen.replace(' ', 'T')) : null; return d && !isNaN(d) ? (Date.now() - d.getTime()) / 60000 : Infinity; }
+  function pcOnline() { return pcAgeMin() < 3; }
+  function drawPc() {
+    $('refPc').textContent = !pcSeen ? '🔴 Your PC helper has never connected. See REFERENCE-SETUP.md to start it.'
+      : pcOnline() ? '🟢 Your PC is connected.' : '🔴 Your PC is offline (last seen ' + pcSeen + '). Turn it on, or paste the chat below.';
+  }
   var chats = [], links = [], cats = [], chatId = '', filter = '', busy = false, waitTimer = null;
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function admin() { return !!(C && C.state().isAdmin); }
@@ -76,7 +84,7 @@
       chats.sort(function (a, b) { return (b.links - a.links) || a.name.localeCompare(b.name); });
       var dl = $('refChatList'); dl.innerHTML = '';
       chats.forEach(function (c) { var o = el('option'); o.value = c.name; dl.appendChild(o); });
-      $('refPc').textContent = j.pcSeen ? 'Your PC last checked in ' + j.pcSeen + '.' : 'Your PC has not checked in yet. See REFERENCE-SETUP.md to start it.';
+      pcSeen = j.pcSeen || ''; drawPc();
       note(chats.length ? '' : 'No chats yet. Start reference-sync.py on your PC, or paste a chat below.');
       drawRecent(); drawMatches();
       loadLinks();
@@ -126,8 +134,14 @@
   // Ask the PC for this chat's links, then wait for them.
   $('refGet').onclick = function () {
     if (!chatId) return;
-    note('Asking your PC for the links in ' + chatName(chatId) + '…');
-    C.api({ action: 'refRequest', chatId: chatId }).then(function () { waitForPc(chatId, Date.now()); },
+    var online = pcOnline();
+    note(online ? 'Asking your PC for the links in ' + chatName(chatId) + '…' : 'Saving your request…');
+    C.api({ action: 'refRequest', chatId: chatId }).then(function () {
+      if (online) return waitForPc(chatId, Date.now());
+      // PC off: the request is kept and answered when it's back. Meanwhile, offer the paste option.
+      note('Your PC is offline, so this will run when it is back on. To get the links now, paste or open the chat below.');
+      $('refPasteBox').open = true;
+    },
       function (err) { note('Not sent: ' + err.message); });
   };
   function waitForPc(id, since) {
@@ -136,10 +150,10 @@
     waitTimer = setTimeout(function check() {
       if ($('refView').classList.contains('hidden')) return;
       C.api({ action: 'refChats' }).then(function (j) {
-        chats = j.chats || chats;
+        chats = j.chats || chats; pcSeen = j.pcSeen || pcSeen; drawPc();
         var c = chats.filter(function (x) { return x.id === id; })[0] || {};
         if (c.syncedAt && c.syncedAt !== before) { note('Got ' + c.links + ' links from your PC.'); drawRecent(); loadLinks(); return; }
-        if (Date.now() - since > 5 * 60000) { note('Your PC has not answered in 5 minutes. Is it on, with reference-sync running? You can also paste the chat below.'); return; }
+        if (Date.now() - since > 5 * 60000 || !pcOnline()) { note('Your PC has not answered. It will when it is back on. To get the links now, paste or open the chat below.'); $('refPasteBox').open = true; return; }
         note('Waiting for your PC… (it checks every minute)');
         waitTimer = setTimeout(check, 10000);
       }, function () { waitTimer = setTimeout(check, 15000); });
