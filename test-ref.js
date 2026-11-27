@@ -29,4 +29,42 @@ assert.equal(l.length, 1, 'same link listed once'); assert.equal(l[0].sharedAt, 
 assert.deepEqual(parseChat('just text, no links. Call me at 3.30pm').length, 0);
 assert.equal(parseChat('https://localhost').length, 0, 'not a real website');
 assert.equal(cleanUrl('<https://a.com/x>,'), 'https://a.com/x');
-console.log('reference parser tests passed');
+
+// Excel export: sorted by category order, then newest first
+const { dateNum, exportRows, HEAD } = win.REFPARSE;
+assert.ok(dateNum('26/11/2026 13:48') > dateNum('25/11/2026 23:59'));
+assert.equal(dateNum('11/26/26 9:05 PM'), dateNum('26/11/2026 21:05'), 'US 12-hour export dates');
+assert.equal(dateNum('2026-11-20 09:15'), dateNum('20/11/2026 09:15'));
+assert.equal(dateNum(''), 0);
+const rows = exportRows([
+  { category: 'Video', title: 'Old video', at: '01/11/2026 10:00', url: 'https://v/1', status: 'Done' },
+  { category: '', title: 'Waiting', at: '', url: 'https://w/1', status: 'Pending' },
+  { category: 'Video', title: 'New video', at: '2026-11-20 09:15', url: 'https://v/2', status: 'Done' },
+  { category: 'News', title: 'Story 新闻', at: '05/11/2026 08:00', url: 'https://n/1', status: 'Failed', error: '403' }], ['Video', 'News', 'Other']);
+assert.deepEqual(rows.map(r => r[1]), ['New video', 'Old video', 'Story 新闻', 'Waiting']);
+assert.equal(rows[2][2], 'Could not open: 403'); assert.equal(rows[2][8], 'Failed'); assert.equal(rows[3][0], 'Not sorted yet');
+assert.deepEqual(rows[0][3], { link: 'https://v/2' });
+assert.equal(HEAD.length, rows[0].length);
+
+// The .xlsx file itself (checked with openpyxl when Python has it)
+const xctx = { TextEncoder, Uint8Array, Uint32Array, DataView, ArrayBuffer, String, Math };
+vm.runInNewContext(fs.readFileSync(__dirname + '/xlsx.js', 'utf8'), xctx);
+const bytes = xctx.XLSX.build('Reference', HEAD, rows.concat([['Other', 'Odd <&> "chars"\u0001', 'x', { link: 'https://e.com/?a=1&b=2' }, '', '', '', '', '']]), [20, 40]);
+const out = require('os').tmpdir() + '/ref-test.xlsx';
+fs.writeFileSync(out, bytes);
+const py = require('child_process').spawnSync('python3', ['-c', `
+import sys
+try:
+    import openpyxl
+except ImportError:
+    print('skip'); sys.exit(0)
+ws = openpyxl.load_workbook(sys.argv[1]).active
+assert ws.title == 'Reference'
+assert [c.value for c in ws[1]][:4] == ['Category', 'Title', 'Summary', 'Link']
+assert ws['B2'].value == 'New video' and ws['B4'].value == 'Story 新闻'
+assert ws['D2'].hyperlink.target == 'https://v/2'
+assert ws['B6'].value == 'Odd <&> "chars"' and ws['D6'].hyperlink.target == 'https://e.com/?a=1&b=2'
+assert ws.freeze_panes == 'A2' and ws.auto_filter.ref == 'A1:I6' and ws['A1'].font.b
+print('ok')`, out], { encoding: 'utf8' });
+assert.ok(/^(ok|skip)/.test(py.stdout), py.stdout + py.stderr);
+console.log('reference parser and export tests passed (xlsx ' + py.stdout.trim() + ')');
