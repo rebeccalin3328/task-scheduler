@@ -25,11 +25,12 @@ Pick a WhatsApp contact or group in the app's **Reference** tab. Every link shar
 1. Copy [`reference-sync.py`](reference-sync.py) into your WSL home, for example `~/reference-sync/`.
 2. Run `python3 ~/reference-sync/reference-sync.py`. It makes `reference-sync.json` next to it.
 3. Open that file and fill in `crm_url` (the `/exec` link), `team_key` and `admin_key`. Leave the rest.
-4. Run it again. It should say "Connected to the WhatsApp MCP (read only)" and "Sent … chat names". Leave the window open.
+4. Run it again. It should say "Sent … chat names". Press Ctrl+C to stop it.
+5. **Keep it running in the background:** `python3 ~/reference-sync/reference-sync.py --install`. It then starts hidden whenever you log in to Windows and restarts if it stops, so closing windows doesn't stop it. Check on it with `--status`; remove it with `--uninstall`.
 
-If Claude is already using the WhatsApp MCP, the helper can't start a second copy. It then reads the MCP's message store directly, opened read only, and says so.
+It opens WhatsApp only while it is reading a chat you asked for (and every 30 minutes for the chat list), then lets go, so Claude's own WhatsApp connection keeps working. If WhatsApp is busy, it reads the MCP's message store directly, opened read only.
 
-**Start it with Windows (optional):** Task Scheduler → Create Basic Task → *When I log on* → Program `wsl.exe`, arguments `-e python3 /home/<you>/reference-sync/reference-sync.py`.
+The PC must be on and awake. In the app, 🟢 means your PC is connected and 🔴 means it is off. When it's off, "Get links" is kept and runs when the PC is back, and the paste option opens so you can get links straight away.
 
 ## 3. Use it
 1. In the app, tap **Reference**, type the chat's name and pick it.

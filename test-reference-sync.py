@@ -63,6 +63,7 @@ def fake_crm(cfg, body):
     if body['action'] == 'refPending': return {'ok': True, 'chats': [{'id': '1203@g.us', 'name': 'Sales team'}]}
     if body['action'] == 'refPush': return {'ok': True, 'added': len(body['links'])}
     if body['action'] == 'refProcess': return {'ok': True, 'done': 2, 'left': 0 if len(sent) > 3 else 1}
+    if body['action'] == 'refPushChats': return {'ok': True, 'count': len(body['chats'])}
 rs.crm = fake_crm
 class R:
     def links(self, cid): return [{'url': 'https://example.com/p.pdf'}] if cid == '1203@g.us' else []
@@ -88,4 +89,27 @@ except sqlite3.OperationalError:
 # Plain-text answers still work
 assert rs.chats_from('Sales team (1203@g.us)\nAli - 60123@s.whatsapp.net')[0] == {'id': '1203@g.us', 'name': 'Sales team', 'kind': 'Group'}
 assert [l['url'] for l in rs.links_from('[09:00] Ali: https://a.example.com/x, and https://chat.whatsapp.com/INVITE')] == ['https://a.example.com/x']
+# A full round (--once): WhatsApp is opened only because there's work, and let go afterwards
+sent.clear()
+rs.load_config = lambda: dict(cfg, crm_url='https://x/exec', admin_key='a')
+rs.HERE = tmp  # lock file goes here
+opened = []
+_Reader = rs.Reader
+class CountingReader(_Reader):
+    def __init__(self, c): opened.append(1); _Reader.__init__(self, c)
+    def close(self): opened.append(-1); _Reader.close(self)
+rs.Reader = CountingReader
+sys.argv = ['reference-sync.py', '--once']
+rs.main()
+assert opened == [1, -1], opened
+acts = [b['action'] for b in sent]
+assert acts[:2] == ['refPending', 'refPush'] and 'refPushChats' in acts, acts
+# Nothing asked and chat list not due: WhatsApp isn't opened at all
+opened.clear(); sent.clear()
+rs.CHATS_EVERY = 10 ** 12
+def quiet(cfg, body):
+    sent.append(body); return {'ok': True, 'chats': []}
+rs.crm = quiet
+rs.main()
+assert opened == [], opened
 print('reference-sync tests passed')
