@@ -369,7 +369,9 @@ assert.equal(call({ action: 'list' }).files.length, 3);
   assert.ok(!R.sheets.Reference && !R.sheets.RefChat, 'nothing about chats is written to the team CRM sheet');
   assert.equal(JSON.stringify(R.source), sheetBefore, 'airnergy_crm_backend untouched');
 
+  const w0 = R.refSheets.Reference.writes || 0;
   let p = ref({ action: 'refProcess', chatId: '1203@g.us' });
+  assert.equal(R.refSheets.Reference.writes - w0, 6, 'two writes per link (picked, then done), not one per cell');
   assert.equal(p.done, 3); assert.equal(p.left, 1);
   p = ref({ action: 'refProcess' });
   assert.equal(p.left, 1, 'a page that fails is tried once more');
