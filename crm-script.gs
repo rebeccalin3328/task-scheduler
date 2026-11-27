@@ -40,7 +40,14 @@ var PRIORITIES = ['Urgent', 'High', 'Normal', 'Low']; // Task.Priority; the app 
 var DELETED_STATUS = 'Deleted';  // deleted tasks keep their row (for the record) but are hidden everywhere
 var STATUS_TAGS = ['Lead', 'Prospect', 'Customer', 'Inactive']; // kept in Contact.CRMTags
 
-function doGet(e) { return out_(handle_(e.parameter || {})); }
+function doGet(e) { return out_(handle_((e && e.parameter) || {})); }
+/** Run this once from the Apps Script editor (pick "authorize", then ▶ Run) to give the script every permission it needs,
+ *  including opening web pages for Reference. It writes "OK" in the log when all is well. */
+function authorize() {
+  UrlFetchApp.fetch('https://www.google.com', { muteHttpExceptions: true });
+  SpreadsheetApp.getActiveSpreadsheet(); DriveApp.getRootFolder(); CalendarApp.getDefaultCalendar();
+  Logger.log('OK: the script can open web pages, sheets, Drive and Calendar.');
+}
 function doPost(e) {
   var body = {};
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
