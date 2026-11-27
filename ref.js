@@ -43,7 +43,31 @@
     });
     return out;
   }
-  window.REFPARSE = { parseChat: parseChat, cleanUrl: cleanUrl };
+  // ---- Excel export: sorted by category (in the app's order), then newest first ----
+  // "26/11/2026 13:48", "11/26/26 9:05 PM", "2026-11-20 09:15" → sortable number (0 if unknown).
+  function dateNum(s) {
+    s = String(s || '');
+    var m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/), y, mo, d, h = 0, mi = 0;
+    if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; h = +(m[4] || 0); mi = +(m[5] || 0); }
+    else if ((m = s.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:\s+(\d{1,2})[:.](\d{2})(?:[:.]\d{2})?\s*([AaPp])?)?/))) {
+      d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000;
+      if (mo > 12 || m[6]) { var t = d; d = mo; mo = t; } // US style (12-hour exports): month first
+      h = +(m[4] || 0); mi = +(m[5] || 0);
+      if (m[6] && /p/i.test(m[6]) && h < 12) h += 12; if (m[6] && /a/i.test(m[6]) && h === 12) h = 0;
+    } else return 0;
+    return ((y * 100 + mo) * 100 + d) * 10000 + h * 100 + mi;
+  }
+  var XL_HEAD = ['Category', 'Title', 'Summary', 'Link', 'Website', 'Shared by', 'Shared on', 'Chat', 'Status'];
+  function exportRows(list, catOrder) {
+    var rank = function (c) { var i = (catOrder || []).indexOf(c); return c ? (i < 0 ? 900 : i) : 999; };
+    return list.slice().sort(function (a, b) {
+      return rank(a.category) - rank(b.category) || dateNum(b.at) - dateNum(a.at) || String(a.title).localeCompare(String(b.title));
+    }).map(function (l) {
+      return [l.category || 'Not sorted yet', l.title || '', l.summary || (l.status === 'Failed' ? 'Could not open: ' + (l.error || '') : ''),
+        { link: l.url }, l.domain || '', l.by || '', l.at || '', l.chat || '', l.status === 'Done' ? '' : l.status || ''];
+    });
+  }
+  window.REFPARSE = { parseChat: parseChat, cleanUrl: cleanUrl, dateNum: dateNum, exportRows: exportRows, HEAD: XL_HEAD };
   if (typeof document === 'undefined' || !document.getElementById('refView')) return;
 
   // ---- Screen ----
@@ -234,6 +258,27 @@
     shown.slice(0, 300).forEach(function (l) { list.appendChild(card(l)); });
   }
   $('refSearch').addEventListener('input', render);
+
+  // Download what is on screen (this chat or all chats, the chosen category and search) as an Excel file.
+  function shownLinks() {
+    var q = $('refSearch').value.trim().toLowerCase();
+    return links.filter(function (l) {
+      return (!filter || l.category === filter) && (!q || (l.title + ' ' + l.summary + ' ' + l.url + ' ' + l.by + ' ' + l.chat).toLowerCase().indexOf(q) >= 0);
+    });
+  }
+  $('refExport').onclick = function () {
+    var list = shownLinks();
+    if (!list.length) { note('Nothing to export yet.'); return; }
+    var rows = exportRows(list, cats);
+    var bytes = XLSX.build('Reference', XL_HEAD, rows, [20, 40, 70, 45, 22, 18, 17, 24, 10]);
+    var d = new Date(), day = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    var who = (chatId ? chatName(chatId) : 'All chats') + (filter ? ' ' + filter : '');
+    var name = ('Reference ' + who + ' ' + day).replace(/[\\\/:*?"<>|&]+/g, ' ').replace(/\s+/g, '_') + '.xlsx';
+    var url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    var a = el('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    note('Saved ' + rows.length + ' links to ' + name + ' (in Downloads).');
+  };
 
   function card(l) {
     var d = el('div', 'ref');
